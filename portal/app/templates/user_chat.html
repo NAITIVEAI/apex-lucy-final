@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>APEX Support Chat - {{ conversation_id }}</title>
+    <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <style>
+        .message-container {
+            height: calc(100vh - 200px);
+            overflow-y: auto;
+        }
+        .user-message {
+            background-color: #e3f2fd;
+            margin-left: 20%;
+        }
+        .agent-message {
+            background-color: #f5f5f5;
+            margin-right: 20%;
+        }
+        .system-message {
+            background-color: #fff9c4;
+            text-align: center;
+            font-style: italic;
+            margin: 0 20%;
+        }
+    </style>
+</head>
+<body class="bg-gray-100">
+    <div class="container mx-auto px-4 py-6">
+        <!-- Header -->
+        <div class="bg-white rounded-lg shadow-md p-6 mb-6">
+            <div class="flex items-center justify-between">
+                <div>
+                    <h1 class="text-2xl font-bold text-gray-800">
+                        <i class="fas fa-comments text-blue-500 mr-2"></i>
+                        APEX Support Chat
+                    </h1>
+                    <p class="text-gray-600 mt-1">Chat with our support team</p>
+                </div>
+                <div class="text-right">
+                    <p class="text-sm text-gray-500">Conversation ID</p>
+                    <p class="font-mono text-sm">{{ conversation_id[:8] }}...</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Chat Container -->
+        <div class="bg-white rounded-lg shadow-md">
+            <!-- Messages -->
+            <div id="messages" class="message-container p-6">
+                <!-- Initial message -->
+                <div class="message system-message rounded-lg p-4 mb-4">
+                    <p><i class="fas fa-info-circle"></i> Welcome to APEX Support Chat. An agent will join shortly.</p>
+                </div>
+                
+                <!-- Existing messages -->
+                {% for msg in messages %}
+                <div class="message {% if msg.role == 'user' %}user-message{% elif msg.role == 'agent' %}agent-message{% else %}system-message{% endif %} rounded-lg p-4 mb-4">
+                    <div class="font-semibold text-sm text-gray-600 mb-1">
+                        {% if msg.role == 'user' %}
+                            <i class="fas fa-user"></i> You
+                        {% elif msg.role == 'agent' %}
+                            <i class="fas fa-headset"></i> {{ msg.agent_name or 'Agent' }}
+                        {% else %}
+                            <i class="fas fa-info-circle"></i> System
+                        {% endif %}
+                        <span class="ml-2 text-xs">{{ msg.timestamp or '' }}</span>
+                    </div>
+                    <div class="message-content">{{ msg.content }}</div>
+                </div>
+                {% endfor %}
+            </div>
+
+            <!-- Input Area -->
+            <div class="border-t p-4">
+                <form id="messageForm" class="flex gap-2">
+                    <input 
+                        type="text" 
+                        id="messageInput" 
+                        class="flex-1 px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        placeholder="Type your message..."
+                        required
+                    >
+                    <button 
+                        type="submit"
+                        class="bg-blue-500 hover:bg-blue-600 text-white px-6 py-2 rounded-lg transition-colors"
+                    >
+                        <i class="fas fa-paper-plane mr-2"></i>Send
+                    </button>
+                </form>
+            </div>
+        </div>
+
+        <!-- Status Bar -->
+        <div class="mt-4 text-center text-sm text-gray-500">
+            <span id="connectionStatus">
+                <i class="fas fa-circle text-yellow-500"></i> Connecting...
+            </span>
+        </div>
+    </div>
+
+    <script>
+        const conversationId = "{{ conversation_id }}";
+        let ws = null;
+        let reconnectAttempts = 0;
+        const maxReconnectAttempts = 5;
+
+        function connectWebSocket() {
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const wsUrl = `${protocol}//${window.location.host}/ws/conversation/${conversationId}?client_type=user`;
+            
+            ws = new WebSocket(wsUrl);
+
+            ws.onopen = () => {
+                console.log('WebSocket connected');
+                document.getElementById('connectionStatus').innerHTML = 
+                    '<i class="fas fa-circle text-green-500"></i> Connected';
+                reconnectAttempts = 0;
+                
+                // Send identification
+                ws.send(JSON.stringify({
+                    type: 'client_identification',
+                    client_type: 'user',
+                    timestamp: new Date().toISOString()
+                }));
+            };
+
+            ws.onmessage = (event) => {
+                const data = JSON.parse(event.data);
+                console.log('Received:', data);
+                
+                if (data.type === 'agent_joined') {
+                    addMessage('system', `${data.agent} has joined the conversation`, 'System');
+                } else if (data.type === 'agent_left') {
+                    addMessage('system', `${data.agent} has left the conversation`, 'System');
+                } else if (data.role === 'agent' || data.type === 'agent_message') {
+                    addMessage('agent', data.content || data.display_content, data.agent_name || 'Agent');
+                } else if (data.type === 'system') {
+                    addMessage('system', data.content, 'System');
+                }
+            };
+
+            ws.onclose = () => {
+                console.log('WebSocket disconnected');
+                document.getElementById('connectionStatus').innerHTML = 
+                    '<i class="fas fa-circle text-red-500"></i> Disconnected';
+                
+                // Try to reconnect
+                if (reconnectAttempts < maxReconnectAttempts) {
+                    reconnectAttempts++;
+                    setTimeout(connectWebSocket, 2000 * reconnectAttempts);
+                }
+            };
+
+            ws.onerror = (error) => {
+                console.error('WebSocket error:', error);
+            };
+        }
+
+        function addMessage(role, content, author) {
+            const messagesDiv = document.getElementById('messages');
+            const messageDiv = document.createElement('div');
+            
+            let className = 'message rounded-lg p-4 mb-4 ';
+            if (role === 'user') className += 'user-message';
+            else if (role === 'agent') className += 'agent-message';
+            else className += 'system-message';
+            
+            messageDiv.className = className;
+            
+            const timestamp = new Date().toLocaleTimeString();
+            
+            messageDiv.innerHTML = `
+                <div class="font-semibold text-sm text-gray-600 mb-1">
+                    ${role === 'user' ? '<i class="fas fa-user"></i> You' : 
+                      role === 'agent' ? `<i class="fas fa-headset"></i> ${author}` : 
+                      '<i class="fas fa-info-circle"></i> System'}
+                    <span class="ml-2 text-xs">${timestamp}</span>
+                </div>
+                <div class="message-content">${content}</div>
+            `;
+            
+            messagesDiv.appendChild(messageDiv);
+            messagesDiv.scrollTop = messagesDiv.scrollHeight;
+        }
+
+        // Handle form submission
+        document.getElementById('messageForm').addEventListener('submit', (e) => {
+            e.preventDefault();
+            
+            const input = document.getElementById('messageInput');
+            const message = input.value.trim();
+            
+            if (message && ws && ws.readyState === WebSocket.OPEN) {
+                // Send message
+                ws.send(JSON.stringify({
+                    role: 'user',
+                    content: message,
+                    user_name: 'Class Member',
+                    timestamp: new Date().toISOString()
+                }));
+                
+                // Add to UI
+                addMessage('user', message, 'You');
+                
+                // Clear input
+                input.value = '';
+            }
+        });
+
+        // Connect on load
+        connectWebSocket();
+    </script>
+</body>
+</html>

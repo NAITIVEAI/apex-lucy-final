@@ -1,0 +1,55 @@
+# .dockerignore file
+# Exclude unnecessary files from Docker build
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+
+# Virtual environment
+.venv/
+venv/
+ENV/
+env/
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Git
+.git/
+.gitignore
+
+# Documentation
+docs/
+*.md
+!requirements.txt
+!chainlit.md  # CRITICAL: Include chainlit.md for version tracking
+
+# Tests
+tests/
+test_*.py
+*_test.py
+
+# Temporary files
+*.log
+*.tmp
+.DS_Store
+
+# Local environment files
+.env.local
+.env.*.local
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
+
+# IMPORTANT: Do NOT exclude callback_system.py!
+# !callback_system.py is explicitly included

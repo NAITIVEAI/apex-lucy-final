@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Apex Support Conversation</title>
+    <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="/static/css/conversation.css">
+    <link rel="icon" href="/public/favicon.png">
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js"></script>
+    <script>
+        // Store conversation info for WebSocket
+        const conversationId = "{{ conversation_id }}";
+        const agentId = "{{ agent.id }}";
+        const agentName = "{{ agent.name }}";
+        const userApexId = "{{ user_info.apex_id|default('Unknown') }}";
+    </script>
+</head>
+<body class="bg-gray-50 h-screen flex flex-col">
+    <!-- Top Navigation -->
+    <nav class="bg-white shadow-sm">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex justify-between h-16">
+                <div class="flex">
+                    <div class="flex-shrink-0 flex items-center">
+                        <a href="/agent/portal">
+                            <img class="h-10 w-auto" src="/public/logo_light.png" alt="Apex">
+                        </a>
+                    </div>
+                    <div class="ml-6 flex items-center">
+                        <h1 class="text-xl font-semibold text-gray-900">Support Conversation</h1>
+                    </div>
+                </div>
+                <div class="flex items-center">
+                    <span class="text-sm text-gray-500 mr-4">Agent: {{ agent.name }}</span>
+                    <a href="/agent/portal" class="inline-flex items-center px-3 py-2 border border-gray-300 shadow-sm text-sm leading-4 font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500">
+                        Back to Portal
+                    </a>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Main Content -->
+    <div class="flex flex-1 overflow-hidden">
+        <!-- Sidebar -->
+        <div class="hidden md:flex md:flex-shrink-0 md:w-64 border-r border-gray-200 bg-white">
+            <div class="flex flex-col h-full">
+                <!-- User Info Section -->
+                <div class="p-4 border-b border-gray-200">
+                    <h2 class="text-lg font-medium text-gray-900">User Information</h2>
+                    <div class="mt-2 text-sm">
+                        <div class="flex justify-between py-1">
+                            <span class="font-medium text-gray-500">Name:</span>
+                            <span class="text-gray-900">{{ user_info.name|default('Unknown') }}</span>
+                        </div>
+                        <div class="flex justify-between py-1">
+                            <span class="font-medium text-gray-500">Apex ID:</span>
+                            <span class="text-gray-900">{{ user_info.apex_id|default('Unknown') }}</span>
+                        </div>
+                        {% if user_info.case_name %}
+                        <div class="flex justify-between py-1">
+                            <span class="font-medium text-gray-500">Case:</span>
+                            <span class="text-gray-900">{{ user_info.case_name }}</span>
+                        </div>
+                        {% endif %}
+                    </div>
+                </div>
+                
+                <!-- Connection Status -->
+                <div class="p-4 border-b border-gray-200">
+                    <h2 class="text-lg font-medium text-gray-900">Connection</h2>
+                    <div class="mt-2">
+                        <div id="connection-indicator" class="flex items-center">
+                            <div class="h-2.5 w-2.5 rounded-full bg-yellow-400 mr-2"></div>
+                            <span class="text-sm text-yellow-600">Connecting...</span>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Member Notes -->
+                <div class="p-4 border-b border-gray-200">
+                    <h2 class="text-lg font-medium text-gray-900">Member Notes</h2>
+                    <div class="mt-2">
+                        <textarea id="member-note" class="w-full p-2 border border-gray-300 rounded-md text-sm" rows="4" placeholder="Add notes about this member..."></textarea>
+                        <div class="text-xs text-gray-500 mt-1">AI summary auto-populated when available</div>
+                        <button id="save-note" class="mt-2 w-full inline-flex justify-center items-center px-3 py-1 border border-transparent text-xs font-medium rounded-md text-white bg-green-600 hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500">
+                            Save Note to Profile
+                        </button>
+                    </div>
+                </div>
+                
+                <!-- Actions -->
+                <div class="p-4">
+                    <h2 class="text-lg font-medium text-gray-900">Actions</h2>
+                    <div class="mt-2 space-y-2">
+                        <button id="download-transcript" class="w-full inline-flex justify-center items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-indigo-700 bg-indigo-100 hover:bg-indigo-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500">
+                            Download Transcript
+                        </button>
+                        <button id="view-history" class="w-full inline-flex justify-center items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500" title="Retry loading conversation history">
+                            🔄 Reload History
+                        </button>
+                        <button id="end-conversation" class="w-full inline-flex justify-center items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-red-700 bg-red-100 hover:bg-red-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500">
+                            End Conversation
+                        </button>
+                    </div>
+                </div>
+                
+                <!-- Quick Responses (Optional) -->
+                <!-- Commenting out quick responses to prevent accidental automated messages
+                <div class="p-4 border-t border-gray-200 mt-auto">
+                    <h2 class="text-lg font-medium text-gray-900">Quick Responses</h2>
+                    <div class="mt-2 space-y-2">
+                        <button class="quick-response w-full text-left text-sm px-3 py-2 bg-gray-50 hover:bg-gray-100 rounded-md" data-text="I'll help you with that. Could you please provide some more details?">
+                            Request more info
+                        </button>
+                        <button class="quick-response w-full text-left text-sm px-3 py-2 bg-gray-50 hover:bg-gray-100 rounded-md" data-text="Thank you for your patience. I'm checking your case details now.">
+                            Checking case details
+                        </button>
+                        <button class="quick-response w-full text-left text-sm px-3 py-2 bg-gray-50 hover:bg-gray-100 rounded-md" data-text="Is there anything else I can assist you with today?">
+                            Anything else?
+                        </button>
+                    </div>
+                </div>
+                -->
+            </div>
+        </div>
+
+        <!-- Chat Area -->
+        <div class="flex flex-col flex-1 overflow-hidden">
+            <!-- Chat Messages -->
+            <div id="messages-container" class="flex-1 overflow-y-auto p-4">
+                <!-- System welcome message -->
+                <div class="flex justify-center mb-6">
+                    <div class="inline-block px-4 py-2 rounded-md bg-gray-100 text-sm text-gray-700">
+                        Conversation started. You are now connected to this support request.
+                    </div>
+                </div>
+
+                <!-- Messages will be inserted here by JavaScript -->
+                {% for message in history %}
+                <div class="message-wrapper {% if message.role == 'agent' %}justify-end{% else %}justify-start{% endif %} mb-4">
+                    <div class="{% if message.role == 'agent' %}agent-message{% elif message.role == 'system' %}system-message{% else %}user-message{% endif %}">
+                        <div class="message-header">
+                            <span class="message-author">{{ message.role|title }}</span>
+                            <span class="message-time">{{ message.timestamp }}</span>
+                        </div>
+                        <div class="message-content">
+                            {{ message.content }}
+                        </div>
+                    </div>
+                </div>
+                {% endfor %}
+                
+                <!-- Connection status message -->
+                <div id="join-message" class="flex justify-center mb-4">
+                    <div class="inline-block px-4 py-2 rounded-md bg-blue-100 text-sm text-blue-700">
+                        You've joined the conversation as {{ agent.name }}
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Message Input -->
+            <div class="border-t border-gray-200 p-4 bg-white">
+                <form id="message-form" class="flex items-start space-x-3">
+                    <div class="flex-1">
+                        <textarea id="message-input" class="shadow-sm block w-full focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm border border-gray-300 rounded-md p-2" placeholder="Type your message..." rows="3"></textarea>
+                        <div class="text-xs text-gray-500 mt-1">Press Enter to send, Shift+Enter for new line</div>
+                    </div>
+                    <button type="submit" id="send-button" class="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500">
+                        Send
+                    </button>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/js/conversation.js"></script>
+    
+    <!-- Version info -->
+    <div style="position: fixed; bottom: 10px; right: 10px; font-size: 10px; color: #888; background: rgba(255,255,255,0.8); padding: 4px 8px; border-radius: 4px; z-index: 1000;">
+        Build: {{ build_version }} | Callback: {{ callback_system_version }}
+    </div>
+</body>
+</html> 

@@ -1,0 +1,853 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Lucy Analytics Dashboard</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.js"></script>
+    <style>
+      :root {
+          --background: 0 0% 100%;
+          --foreground: 222.2 84% 4.9%;
+          --card: 0 0% 100%;
+          --card-foreground: 222.2 84% 4.9%;
+          --popover: 0 0% 100%;
+          --popover-foreground: 222.2 84% 4.9%;
+          --primary: 221.2 83.2% 53.3%;
+          --primary-foreground: 210 40% 98%;
+          --secondary: 210 40% 96%;
+          --secondary-foreground: 222.2 84% 4.9%;
+          --muted: 210 40% 96%;
+          --muted-foreground: 215.4 16.3% 46.9%;
+          --accent: 210 40% 96%;
+          --accent-foreground: 222.2 84% 4.9%;
+          --destructive: 0 84.2% 60.2%;
+          --destructive-foreground: 210 40% 98%;
+          --border: 214.3 31.8% 91.4%;
+          --input: 214.3 31.8% 91.4%;
+          --ring: 221.2 83.2% 53.3%;
+          --radius: 0.5rem;
+      }
+
+      * {
+          margin: 0;
+          padding: 0;
+          box-sizing: border-box;
+      }
+
+      body {
+          font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+          background-color: hsl(var(--background));
+          color: hsl(var(--foreground));
+          line-height: 1.5;
+          -webkit-font-smoothing: antialiased;
+      }
+
+      .dashboard-container {
+          min-h-screen;
+          background: linear-gradient(to bottom right, hsl(var(--background)), hsl(var(--muted)));
+      }
+
+      .header {
+          border-bottom: 1px solid hsl(var(--border));
+          background: hsl(var(--card));
+          backdrop-filter: blur(8px);
+          position: sticky;
+          top: 0;
+          z-index: 40;
+      }
+
+      .header-content {
+          max-width: 1400px;
+          margin: 0 auto;
+          padding: 1rem 1.5rem;
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+      }
+
+      .header h1 {
+          font-size: 1.5rem;
+          font-weight: 600;
+          color: hsl(var(--foreground));
+          display: flex;
+          align-items: center;
+          gap: 0.5rem;
+      }
+
+      .header-actions {
+          display: flex;
+          align-items: center;
+          gap: 1rem;
+      }
+
+      .live-indicator {
+          display: flex;
+          align-items: center;
+          gap: 0.5rem;
+          padding: 0.375rem 0.75rem;
+          background: hsl(var(--secondary));
+          border-radius: var(--radius);
+          font-size: 0.875rem;
+          font-weight: 500;
+      }
+
+      .status-dot {
+          width: 8px;
+          height: 8px;
+          border-radius: 50%;
+          background: #10b981;
+          animation: pulse 2s infinite;
+      }
+
+      @keyframes pulse {
+          0%, 100% { opacity: 1; }
+          50% { opacity: 0.5; }
+      }
+
+      .main-content {
+          max-width: 1400px;
+          margin: 0 auto;
+          padding: 2rem 1.5rem;
+      }
+
+      .page-header {
+          margin-bottom: 2rem;
+      }
+
+      .page-title {
+          font-size: 2rem;
+          font-weight: 700;
+          color: hsl(var(--foreground));
+          margin-bottom: 0.5rem;
+      }
+
+      .page-description {
+          color: hsl(var(--muted-foreground));
+          font-size: 1rem;
+      }
+
+      .grid {
+          display: grid;
+          gap: 1.5rem;
+      }
+
+      .grid-cols-1 { grid-template-columns: repeat(1, minmax(0, 1fr)); }
+      .grid-cols-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .grid-cols-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+      .grid-cols-4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+
+      @media (min-width: 768px) {
+          .md\\:grid-cols-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+          .md\\:grid-cols-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+          .md\\:grid-cols-4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+      }
+
+      @media (min-width: 1024px) {
+          .lg\\:grid-cols-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+          .lg\\:grid-cols-4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+      }
+
+      .card {
+          background: hsl(var(--card));
+          border: 1px solid hsl(var(--border));
+          border-radius: calc(var(--radius) + 2px);
+          padding: 1.5rem;
+          box-shadow: 0 1px 3px 0 rgb(0 0 0 / 0.1), 0 1px 2px -1px rgb(0 0 0 / 0.1);
+          transition: all 0.2s;
+      }
+
+      .card:hover {
+          box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
+      }
+
+      .card-header {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          margin-bottom: 1rem;
+      }
+
+      .card-title {
+          font-size: 0.875rem;
+          font-weight: 500;
+          color: hsl(var(--muted-foreground));
+          text-transform: uppercase;
+          letter-spacing: 0.05em;
+      }
+
+      .card-icon {
+          width: 1rem;
+          height: 1rem;
+          color: hsl(var(--muted-foreground));
+      }
+
+      .metric-value {
+          font-size: 2.25rem;
+          font-weight: 700;
+          color: hsl(var(--foreground));
+          line-height: 1;
+          margin-bottom: 0.25rem;
+      }
+
+      .metric-change {
+          display: flex;
+          align-items: center;
+          gap: 0.25rem;
+          font-size: 0.875rem;
+          font-weight: 500;
+      }
+
+      .metric-change.positive {
+          color: #10b981;
+      }
+
+      .metric-change.negative {
+          color: #ef4444;
+      }
+
+      .metric-change.neutral {
+          color: hsl(var(--muted-foreground));
+      }
+
+      .chart-card {
+          background: hsl(var(--card));
+          border: 1px solid hsl(var(--border));
+          border-radius: calc(var(--radius) + 2px);
+          padding: 1.5rem;
+          box-shadow: 0 1px 3px 0 rgb(0 0 0 / 0.1), 0 1px 2px -1px rgb(0 0 0 / 0.1);
+          grid-column: span 2;
+      }
+
+      .chart-header {
+          margin-bottom: 1.5rem;
+      }
+
+      .chart-title {
+          font-size: 1.125rem;
+          font-weight: 600;
+          color: hsl(var(--foreground));
+          margin-bottom: 0.5rem;
+      }
+
+      .chart-description {
+          color: hsl(var(--muted-foreground));
+          font-size: 0.875rem;
+      }
+
+      .status-card {
+          border-left: 4px solid;
+      }
+
+      .status-card.success {
+          border-left-color: #10b981;
+      }
+
+      .status-card.warning {
+          border-left-color: #f59e0b;
+      }
+
+      .status-card.error {
+          border-left-color: #ef4444;
+      }
+
+      .status-card.info {
+          border-left-color: #3b82f6;
+      }
+
+      .badge {
+          display: inline-flex;
+          align-items: center;
+          padding: 0.25rem 0.75rem;
+          font-size: 0.75rem;
+          font-weight: 500;
+          border-radius: calc(var(--radius) - 2px);
+          text-transform: uppercase;
+          letter-spacing: 0.05em;
+      }
+
+      .badge.success {
+          background: #dcfce7;
+          color: #166534;
+      }
+
+      .badge.warning {
+          background: #fef3c7;
+          color: #92400e;
+      }
+
+      .badge.error {
+          background: #fecaca;
+          color: #991b1b;
+      }
+
+      .badge.info {
+          background: #dbeafe;
+          color: #1e40af;
+      }
+
+      .recommendations {
+          background: hsl(var(--card));
+          border: 1px solid hsl(var(--border));
+          border-radius: calc(var(--radius) + 2px);
+          padding: 1.5rem;
+          box-shadow: 0 1px 3px 0 rgb(0 0 0 / 0.1), 0 1px 2px -1px rgb(0 0 0 / 0.1);
+      }
+
+      .recommendation-item {
+          padding: 0.75rem;
+          border-radius: var(--radius);
+          background: hsl(var(--muted));
+          margin-bottom: 0.75rem;
+          font-size: 0.875rem;
+          border-left: 3px solid hsl(var(--primary));
+      }
+
+      .recommendation-item:last-child {
+          margin-bottom: 0;
+      }
+
+      .loading {
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          min-height: 200px;
+          color: hsl(var(--muted-foreground));
+      }
+
+      .error-state {
+          padding: 1rem;
+          background: #fef2f2;
+          border: 1px solid #fecaca;
+          border-radius: var(--radius);
+          color: #991b1b;
+          text-align: center;
+      }
+
+      /* Chart containers */
+      .chart-container {
+          position: relative;
+          height: 300px;
+      }
+
+      /* Responsive adjustments */
+      @media (max-width: 768px) {
+          .chart-card {
+              grid-column: span 1;
+          }
+
+          .header-content {
+              flex-direction: column;
+              gap: 1rem;
+              align-items: flex-start;
+          }
+
+          .metric-value {
+              font-size: 1.875rem;
+          }
+      }
+
+      /* Animations */
+      .fade-in {
+          animation: fadeIn 0.5s ease-in;
+      }
+
+      @keyframes fadeIn {
+          from {
+              opacity: 0;
+              transform: translateY(10px);
+          }
+          to {
+              opacity: 1;
+              transform: translateY(0);
+          }
+      }
+
+      .slide-up {
+          animation: slideUp 0.3s ease-out;
+      }
+
+      @keyframes slideUp {
+          from {
+              transform: translateY(20px);
+              opacity: 0;
+          }
+          to {
+              transform: translateY(0);
+              opacity: 1;
+          }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="dashboard-container">
+      <!-- Header -->
+      <header class="header">
+        <div class="header-content">
+          <h1>
+            <i data-lucide="activity"></i>
+            Lucy Dashboard
+          </h1>
+          <div class="header-actions">
+            <div class="live-indicator">
+              <div class="status-dot"></div>
+              <span>Live</span>
+            </div>
+          </div>
+        </div>
+      </header>
+
+      <!-- Main Content -->
+      <main class="main-content">
+        <div class="page-header">
+          <h1 class="page-title">Analytics Overview</h1>
+          <p class="page-description">
+            Real-time insights into system performance and user interactions
+          </p>
+        </div>
+
+        <div id="loading" class="loading">
+          <div>
+            <i data-lucide="loader-2" class="animate-spin"></i>
+            <span style="margin-left: 0.5rem">Loading dashboard...</span>
+          </div>
+        </div>
+
+        <div id="error-container" style="display: none"></div>
+
+        <div id="dashboard-content" style="display: none">
+          <!-- Key Metrics Grid -->
+          <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4">
+            <div class="card status-card success">
+              <div class="card-header">
+                <div class="card-title">System Health</div>
+                <i data-lucide="cpu" class="card-icon"></i>
+              </div>
+              <div class="metric-value" id="cpu-usage">--</div>
+              <div class="metric-change neutral">
+                <i data-lucide="activity"></i>
+                <span>CPU Usage</span>
+              </div>
+            </div>
+
+            <div class="card status-card info">
+              <div class="card-header">
+                <div class="card-title">Memory</div>
+                <i data-lucide="hard-drive" class="card-icon"></i>
+              </div>
+              <div class="metric-value" id="memory-usage">--</div>
+              <div class="metric-change neutral">
+                <i data-lucide="trending-up"></i>
+                <span>Memory Usage</span>
+              </div>
+            </div>
+
+            <div class="card status-card success">
+              <div class="card-header">
+                <div class="card-title">Active Sessions</div>
+                <i data-lucide="users" class="card-icon"></i>
+              </div>
+              <div class="metric-value" id="active-conversations">--</div>
+              <div class="metric-change positive">
+                <i data-lucide="arrow-up"></i>
+                <span>+12% vs last hour</span>
+              </div>
+            </div>
+
+            <div class="card status-card" id="teams-status-card">
+              <div class="card-header">
+                <div class="card-title">Teams Status</div>
+                <i data-lucide="link" class="card-icon"></i>
+              </div>
+              <div class="metric-value" id="teams-status">--</div>
+              <div class="metric-change" id="teams-change">
+                <i data-lucide="check-circle"></i>
+                <span>Integration Active</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Performance Metrics -->
+          <div
+            class="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-4"
+            style="margin-top: 1.5rem"
+          >
+            <div class="card">
+              <div class="card-header">
+                <div class="card-title">Success Rate</div>
+                <i data-lucide="target" class="card-icon"></i>
+              </div>
+              <div class="metric-value" id="success-rate">--</div>
+              <div class="metric-change positive">
+                <i data-lucide="trending-up"></i>
+                <span>Authentication</span>
+              </div>
+            </div>
+
+            <div class="card">
+              <div class="card-header">
+                <div class="card-title">Avg Duration</div>
+                <i data-lucide="clock" class="card-icon"></i>
+              </div>
+              <div class="metric-value" id="avg-duration">--</div>
+              <div class="metric-change neutral">
+                <i data-lucide="timer"></i>
+                <span>Per session</span>
+              </div>
+            </div>
+
+            <div class="card">
+              <div class="card-header">
+                <div class="card-title">Pending Callbacks</div>
+                <i data-lucide="phone" class="card-icon"></i>
+              </div>
+              <div class="metric-value" id="pending-callbacks">--</div>
+              <div class="metric-change" id="callbacks-change">
+                <i data-lucide="clock"></i>
+                <span>In queue</span>
+              </div>
+            </div>
+
+            <div class="card">
+              <div class="card-header">
+                <div class="card-title">SLA Compliance</div>
+                <i data-lucide="shield-check" class="card-icon"></i>
+              </div>
+              <div class="metric-value" id="sla-compliance">--</div>
+              <div class="metric-change positive">
+                <i data-lucide="check"></i>
+                <span>24h target</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Charts Section -->
+          <div
+            class="grid grid-cols-1 lg:grid-cols-2"
+            style="margin-top: 1.5rem"
+          >
+            <div class="chart-card">
+              <div class="chart-header">
+                <h3 class="chart-title">System Performance</h3>
+                <p class="chart-description">
+                  Real-time resource utilization metrics
+                </p>
+              </div>
+              <div class="chart-container">
+                <canvas id="performanceChart"></canvas>
+              </div>
+            </div>
+
+            <div class="chart-card">
+              <div class="chart-header">
+                <h3 class="chart-title">Conversation Trends</h3>
+                <p class="chart-description">
+                  Success rates and completion patterns
+                </p>
+              </div>
+              <div class="chart-container">
+                <canvas id="conversationChart"></canvas>
+              </div>
+            </div>
+          </div>
+
+          <!-- Recommendations -->
+          <div class="recommendations" style="margin-top: 1.5rem">
+            <h3 class="chart-title" style="margin-bottom: 1rem">
+              <i
+                data-lucide="lightbulb"
+                style="
+                  width: 1.25rem;
+                  height: 1.25rem;
+                  margin-right: 0.5rem;
+                  vertical-align: middle;
+                "
+              ></i>
+              Recommendations
+            </h3>
+            <div id="recommendations-list">
+              <!-- Populated by JavaScript -->
+            </div>
+          </div>
+        </div>
+      </main>
+    </div>
+
+    <script>
+      // Initialize Lucide icons
+      lucide.createIcons();
+
+      // Dashboard state
+      let performanceChart = null;
+      let conversationChart = null;
+      let updateInterval = null;
+
+      // Initialize dashboard
+      async function initDashboard() {
+        try {
+          await loadMetrics();
+          setupAutoRefresh();
+          showDashboard();
+        } catch (error) {
+          showError("Failed to initialize dashboard: " + error.message);
+        }
+      }
+
+      // Load metrics
+      async function loadMetrics() {
+        // Simulate real metrics (replace with actual API call)
+        const mockMetrics = {
+          system: {
+            cpu_usage: Math.round(Math.random() * 30 + 15),
+            memory_usage: Math.round(Math.random() * 25 + 45),
+            uptime_seconds:
+              Math.floor(Date.now() / 1000) -
+              Math.floor(Math.random() * 86400 * 3),
+          },
+          conversations: {
+            active_conversations: Math.floor(Math.random() * 8 + 2),
+            success_rate: Math.round(Math.random() * 10 + 90),
+            average_duration: Math.round(Math.random() * 5 + 6),
+          },
+          callbacks: {
+            pending_callbacks: Math.floor(Math.random() * 5),
+            sla_compliance: Math.round(Math.random() * 5 + 95),
+            first_call_resolution: Math.round(Math.random() * 10 + 85),
+          },
+          teams: {
+            available: Math.random() > 0.3,
+            error: Math.random() > 0.3 ? null : "Configuration needed",
+          },
+        };
+
+        updateUI(mockMetrics);
+      }
+
+      // Update UI with metrics
+      function updateUI(metrics) {
+        // System metrics
+        document.getElementById("cpu-usage").textContent =
+          metrics.system.cpu_usage + "%";
+        document.getElementById("memory-usage").textContent =
+          metrics.system.memory_usage + "%";
+
+        // Conversation metrics
+        document.getElementById("active-conversations").textContent =
+          metrics.conversations.active_conversations;
+        document.getElementById("success-rate").textContent =
+          metrics.conversations.success_rate + "%";
+        document.getElementById("avg-duration").textContent =
+          metrics.conversations.average_duration + "m";
+
+        // Callback metrics
+        const pendingCallbacks = metrics.callbacks.pending_callbacks;
+        document.getElementById("pending-callbacks").textContent =
+          pendingCallbacks;
+        document.getElementById("sla-compliance").textContent =
+          metrics.callbacks.sla_compliance + "%";
+
+        // Update callbacks status
+        const callbacksChange = document.getElementById("callbacks-change");
+        if (pendingCallbacks > 3) {
+          callbacksChange.className = "metric-change warning";
+          callbacksChange.innerHTML =
+            '<i data-lucide="alert-circle"></i><span>Needs attention</span>';
+        } else {
+          callbacksChange.className = "metric-change positive";
+          callbacksChange.innerHTML =
+            '<i data-lucide="check"></i><span>On track</span>';
+        }
+
+        // Teams status
+        const teamsCard = document.getElementById("teams-status-card");
+        const teamsStatus = document.getElementById("teams-status");
+        const teamsChange = document.getElementById("teams-change");
+
+        if (metrics.teams.available) {
+          teamsStatus.textContent = "Connected";
+          teamsChange.className = "metric-change positive";
+          teamsChange.innerHTML =
+            '<i data-lucide="check-circle"></i><span>Integration Active</span>';
+          teamsCard.className = "card status-card success";
+        } else {
+          teamsStatus.textContent = "Offline";
+          teamsChange.className = "metric-change negative";
+          teamsChange.innerHTML =
+            '<i data-lucide="x-circle"></i><span>Check config</span>';
+          teamsCard.className = "card status-card warning";
+        }
+
+        // Update recommendations
+        updateRecommendations(metrics);
+
+        // Update charts
+        updateCharts(metrics);
+
+        // Re-initialize icons for dynamically added content
+        lucide.createIcons();
+      }
+
+      // Update recommendations
+      function updateRecommendations(metrics) {
+        const recommendations = [
+          `System performance is ${metrics.system.cpu_usage > 80 ? "high" : "optimal"} - CPU at ${metrics.system.cpu_usage}%`,
+          `${metrics.conversations.active_conversations} active conversations with ${metrics.conversations.success_rate}% success rate`,
+          `${metrics.callbacks.pending_callbacks} callbacks pending - ${metrics.callbacks.sla_compliance}% SLA compliance`,
+          `Teams integration ${metrics.teams.available ? "active and healthy" : "requires attention"}`,
+          `Authentication performance trending ${metrics.conversations.success_rate > 95 ? "excellent" : "good"}`,
+        ];
+
+        const container = document.getElementById("recommendations-list");
+        container.innerHTML = recommendations
+          .map((rec) => `<div class="recommendation-item">${rec}</div>`)
+          .join("");
+      }
+
+      // Update charts
+      function updateCharts(metrics) {
+        // Performance Chart
+        const perfCtx = document
+          .getElementById("performanceChart")
+          .getContext("2d");
+
+        if (performanceChart) {
+          performanceChart.destroy();
+        }
+
+        performanceChart = new Chart(perfCtx, {
+          type: "doughnut",
+          data: {
+            labels: ["CPU Usage", "Memory Usage", "Available"],
+            datasets: [
+              {
+                data: [
+                  metrics.system.cpu_usage,
+                  metrics.system.memory_usage,
+                  100 -
+                    Math.max(
+                      metrics.system.cpu_usage,
+                      metrics.system.memory_usage,
+                    ),
+                ],
+                backgroundColor: [
+                  "hsl(221.2 83.2% 53.3%)",
+                  "hsl(262.1 83.3% 57.8%)",
+                  "hsl(142.1 76.2% 36.3%)",
+                ],
+                borderWidth: 0,
+              },
+            ],
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+              legend: {
+                position: "bottom",
+                labels: {
+                  usePointStyle: true,
+                  padding: 20,
+                },
+              },
+            },
+          },
+        });
+
+        // Conversation Chart
+        const convCtx = document
+          .getElementById("conversationChart")
+          .getContext("2d");
+
+        if (conversationChart) {
+          conversationChart.destroy();
+        }
+
+        conversationChart = new Chart(convCtx, {
+          type: "line",
+          data: {
+            labels: [
+              "6h ago",
+              "5h ago",
+              "4h ago",
+              "3h ago",
+              "2h ago",
+              "1h ago",
+              "Now",
+            ],
+            datasets: [
+              {
+                label: "Success Rate",
+                data: [
+                  94,
+                  96,
+                  95,
+                  97,
+                  96,
+                  98,
+                  metrics.conversations.success_rate,
+                ],
+                borderColor: "hsl(142.1 76.2% 36.3%)",
+                backgroundColor: "hsla(142.1, 76.2%, 36.3%, 0.1)",
+                tension: 0.4,
+                fill: true,
+              },
+            ],
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+              legend: {
+                display: false,
+              },
+            },
+            scales: {
+              y: {
+                beginAtZero: false,
+                min: 90,
+                max: 100,
+              },
+            },
+          },
+        });
+      }
+
+      // Setup auto-refresh
+      function setupAutoRefresh() {
+        updateInterval = setInterval(loadMetrics, 30000);
+      }
+
+      // Show dashboard
+      function showDashboard() {
+        document.getElementById("loading").style.display = "none";
+        document.getElementById("dashboard-content").style.display = "block";
+        document.getElementById("dashboard-content").classList.add("fade-in");
+      }
+
+      // Show error
+      function showError(message) {
+        document.getElementById("loading").style.display = "none";
+        const errorContainer = document.getElementById("error-container");
+        errorContainer.innerHTML = `<div class="error-state">⚠️ ${message}</div>`;
+        errorContainer.style.display = "block";
+      }
+
+      // Initialize
+      document.addEventListener("DOMContentLoaded", initDashboard);
+
+      // Cleanup
+      window.addEventListener("beforeunload", () => {
+        if (updateInterval) clearInterval(updateInterval);
+        if (performanceChart) performanceChart.destroy();
+        if (conversationChart) conversationChart.destroy();
+      });
+    </script>
+  </body>
+</html>

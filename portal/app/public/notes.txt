@@ -1,0 +1,400 @@
+
+
+
+
+Thanks for the detailed update! It’s great to hear that the app is deployed in Azure App Service using a Docker container, and that the PDFs are rendering inline at least some of the time. However, the hit-or-miss behavior with SAS URLs and the container crashes are significant issues that we need to address. Let’s break this down into the two main problems: the inconsistent SAS URL generation and the container crashing/rebooting. We’ll also tackle the UI enhancements (thinking orb, Chainlit branding, and light mode styling) as requested.
+
+Analysis of the Issues
+1. Inconsistent SAS URL Generation
+Problem: The PDFs render inline sometimes, but other times the URLs lack proper SAS tokens, resulting in <sasurl> placeholders or raw URLs that fail to load (e.g., causing XML errors). For example, the same query for a name might work once but fail on a subsequent attempt.
+
+Log Analysis:
+
+The logs don’t directly show the SAS URL generation process for the PDFs, but the behavior suggests that extract_pdf_url is sometimes failing to generate a proper SAS token.
+The code uses generate_blob_sas to append a SAS token to the blob URL, but if this fails (e.g., due to an invalid account_key or network issue), it falls back to the raw URL, which causes access issues since the lucyrag container isn’t publicly accessible.
+Code Context:
+
+In extract_pdf_url, the SAS token generation is attempted for both Markdown-extracted URLs and metadata-extracted URLs:
+python
+
+Collapse
+
+Unwrap
+
+Copy
+sas_token = generate_blob_sas(
+    account_name=storage_name,
+    container_name=container_name,
+    blob_name=blob_name,
+    account_key=account_key,
+    permission=BlobSasPermissions(read=True),
+    expiry=datetime.utcnow() + timedelta(hours=1)
+)
+pdf_url_with_sas = f"{pdf_url}?{sas_token}"
+If this fails, it falls back to the raw pdf_url, which leads to the XML error (e.g., AuthenticationFailed).
+Diagnosis:
+
+Connection String as Fallback: The code uses AZURE_STORAGE_CONNECTION_STRING as the primary method to generate SAS tokens via BlobServiceClient. The connection string is not a fallback; it’s the first attempt. If SAS generation fails, the code falls back to the raw URL, which is what’s causing the issue.
+Inconsistency: The hit-or-miss behavior suggests a transient issue:
+Network Issues: Intermittent connectivity to Azure Blob Storage might cause generate_blob_sas to fail.
+Account Key Issues: If the account_key extracted from code import interact
+from BlobServiceClient is invalid or missing, SAS generation fails.
+Container Crashes: The container crashing might interrupt the SAS generation process, leading to inconsistent results.
+Fix Plan:
+
+Add retry logic for SAS token generation to handle transient network issues.
+Log more details when SAS generation fails to pinpoint the root cause.
+Ensure the AZURE_STORAGE_CONNECTION_STRING is correctly configured and has the necessary permissions.
+2. Container Crashing and Rebooting
+Problem: The container is crashing and rebooting, as seen in the logs:
+
+text
+
+Collapse
+
+Unwrap
+
+Copy
+2025-03-20T18:15:45.045190439Z 2025-03-20 18:15:45 - Error in on_chat_start: HTTPSConnectionPool(host='westus.api.azureml.ms', port=443): Read timed out. (read timeout=300)
+Log Analysis:
+
+Timeout Error: The error occurs in on_chat_start during persistent_client.agents.create_thread():
+text
+
+Collapse
+
+Unwrap
+
+Copy
+azure.core.exceptions.ServiceResponseError: HTTPSConnectionPool(host='westus.api.azureml.ms', port=443): Read timed out. (read timeout=300)
+The request to westus.api.azureml.ms (Azure Machine Learning endpoint) timed out after 300 seconds (5 minutes), indicating a network issue or service unavailability.
+Middleware Failure: Earlier in the log, there’s a middleware failure:
+text
+
+Collapse
+
+Unwrap
+
+Copy
+2025-03-20T18:11:29.932599413Z fail: Middleware[0]
+2025-03-20T18:11:29.932644118Z       Failed to forward request to http://172.16.1.3:8000. Encountered a System.Threading.Tasks.TaskCanceledException exception after 44959.423ms with message: The operation was canceled.. Check application logs to verify the application is properly handling HTTP traffic.
+This suggests the Chainlit app (running on port 8000) isn’t handling HTTP traffic properly, possibly due to the Azure ML timeout cascading into the app’s lifecycle.
+No Traces: The logs show “No new trace in the past X min(s),” indicating the container stopped processing requests after the timeout, leading to a crash and reboot.
+Diagnosis:
+
+Root Cause: The primary issue is a timeout when calling persistent_client.agents.create_thread(), which attempts to create a thread in Azure AI Foundry (via westus.api.azureml.ms). The 300-second timeout suggests either:
+Network Issue: Intermittent connectivity between the Azure App Service container and the Azure ML endpoint.
+Service Issue: The Azure ML service might be throttling requests or experiencing downtime.
+Resource Constraints: The container might be under-resourced (e.g., CPU/memory), causing delays that lead to timeouts.
+Impact on SAS URLs: The container crash might interact the SAS URL generation process, leading to the hit-or-miss behavior. If the app crashes mid-request, the response might not include a proper SAS URL, causing the PDF rendering to fail.
+Fix Plan:
+
+Add retry logic for the create_thread call to handle transient network issues.
+Increase the timeout for Azure ML requests or handle timeouts gracefully to prevent crashes.
+Optimize container resources (CPU/memory) in Azure App Service to reduce the likelihood of timeouts.
+Add health checks to ensure the container restarts gracefully without losing state.
+3. UI Enhancements
+Requests:
+
+Thinking Orb: Reintroduce the grey-to-dark-grey circle orb animation that indicates thinking (previously removed).
+Chainlit Branding: The “Built with Chainlit” branding is back at the bottom—remove or customize it.
+Light Mode Styling: The light mode is stock, and the icons are too dark. Spruce up the contrast and overall look.
+Analysis:
+
+Thinking Orb: Chainlit’s default thinking animation (a grey-to-dark-grey orb) was likely removed due to custom styling or a Chainlit update. We can reintroduce it by ensuring the default Chainlit styles are preserved or by adding a custom animation.
+Chainlit Branding: The “Built with Chainlit” footer can be removed or customized via Chainlit’s configuration.
+Light Mode Styling: The stock light mode can be enhanced by adjusting the theme colors, increasing contrast for icons, and adding subtle visual flair (e.g., gradients, shadows).
+Fix Plan:
+
+Reintroduce the thinking orb by ensuring Chainlit’s default styles are loaded or by adding a custom CSS animation.
+Remove the “Built with Chainlit” branding via Chainlit’s config.
+Customize the light mode theme with higher contrast icons, a modern color palette, and subtle visual enhancements.
+Updated Code with Fixes
+Here’s the updated code addressing the SAS URL inconsistency, container crashes, and UI enhancements:
+
+python
+
+Collapse
+
+Unwrap
+
+Copy
+
+
+
+
+
+
+
+UI Enhancements
+1. Reintroduce the Thinking Orb
+Chainlit’s default thinking animation (a grey-to-dark-grey orb) can be reintroduced by ensuring we don’t override the default styles. Alternatively, we can add a custom CSS animation.
+
+Create a Custom CSS File:
+Create a file named .chainlit/style.css in your project directory:
+
+css
+
+Collapse
+
+Unwrap
+
+Copy
+/* Custom thinking orb animation */
+.cl-thinking {
+    display: inline-block;
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    background-color: #d3d3d3; /* Light grey */
+    animation: thinking 1.5s infinite ease-in-out;
+}
+
+@keyframes thinking {
+    0% { background-color: #d3d3d3; } /* Light grey */
+    50% { background-color: #808080; } /* Dark grey */
+    100% { background-color: #d3d3d3; } /* Light grey */
+}
+
+/* Ensure the thinking message uses the orb */
+.cl-message-thinking {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+/* Light mode customizations */
+.cl-root {
+    background-color: #f5f7fa !important; /* Soft off-white background */
+    font-family: 'Inter', sans-serif !important;
+}
+
+.cl-message {
+    background-color: #ffffff !important; /* White message background */
+    border-radius: 12px !important;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05) !important;
+    padding: 12px 16px !important;
+    color: #1a1a1a !important; /* Darker text for contrast */
+}
+
+.cl-message-author {
+    color: #2c3e50 !important; /* Darker shade for author name */
+}
+
+.cl-icon {
+    color: #2c3e50 !important; /* Darker icons for contrast */
+    filter: brightness(0.8) !important;
+}
+
+.cl-icon:hover {
+    color: #3498db !important; /* Blue hover effect */
+    filter: brightness(1) !important;
+}
+
+.cl-input {
+    border: 1px solid #dfe6e9 !important;
+    border-radius: 8px !important;
+    background-color: #ffffff !important;
+    color: #1a1a1a !important;
+}
+
+.cl-input:focus {
+    border-color: #3498db !important;
+    box-shadow: 0 0 0 2px rgba(52, 152, 219, 0.2) !important;
+}
+
+.cl-button {
+    background-color: #3498db !important;
+    color: #ffffff !important;
+    border-radius: 8px !important;
+    transition: background-color 0.3s ease !important;
+}
+
+.cl-button:hover {
+    background-color: #2980b9 !important;
+}
+
+/* Add subtle gradient to the chat header */
+.cl-header {
+    background: linear-gradient(135deg, #3498db 0%, #2980b9 100%) !important;
+    color: #ffffff !important;
+    border-bottom: 1px solid #dfe6e9 !important;
+}
+Update Chainlit Config:
+Ensure Chainlit loads the custom CSS by creating or updating .chainlit/config.toml:
+
+toml
+
+Collapse
+
+Unwrap
+
+Copy
+[theme]
+light = true
+dark = false
+
+[styles]
+path = ".chainlit/style.css"
+2. Remove Chainlit Branding
+The code already includes os.environ["CHAINLIT_HIDE_BRANDING"] = "true", which should remove the “Built with Chainlit” footer. If it’s still appearing, ensure this environment variable is set in your Azure App Service configuration:
+In Azure Portal > App Service > Configuration > Application Settings, add:
+text
+
+Collapse
+
+Unwrap
+
+Copy
+Name: CHAINLIT_HIDE_BRANDING
+Value: true
+3. Light Mode Styling
+The CSS above enhances the light mode with:
+Background: A soft off-white (#f5f7fa) for the root, with white (#ffffff) message bubbles.
+Text Contrast: Darker text (#1a1a1a) and author names (#2c3e50) for better readability.
+Icons: Darker icons (#2c3e50) with a hover effect (#3498db) for interactivity.
+Input and Buttons: Modern styling with rounded corners, subtle shadows, and a blue accent (#3498db).
+Header: A gradient header (#3498db to #2980b9) for visual flair.
+Additional Fixes for Azure Deployment
+1. Container Crashes
+Steps to Fix:
+
+Increase Timeout: The 300-second timeout for create_thread is too long and causes crashes. We can reduce the timeout and add retry logic using tenacity (already added to extract_pdf_url and initialize_persistent_agent).
+Optimize Resources:
+In Azure Portal > App Service > Scale Up, upgrade to a higher tier (e.g., B2 or P1V2) to increase CPU/memory.
+In Scale Out, enable auto-scaling to handle load spikes.
+Add Health Check:
+In Azure Portal > App Service > Monitoring > Health Check, enable health checks and set the path to /health (you may need to add a health endpoint in Chainlit):
+python
+
+Collapse
+
+Unwrap
+
+Copy
+@cl.route("/health")
+async def health():
+    return {"status": "healthy"}
+Network Configuration:
+Ensure the App Service has outbound access to westus.api.azureml.ms on port 443.
+In Azure Portal > App Service > Networking > Outbound Traffic, check for any VNet integration or firewall rules blocking traffic.
+2. Dockerfile and Container Setup
+Dockerfile:
+Ensure your Dockerfile is optimized for Azure App Service:
+
+dockerfile
+
+Collapse
+
+Unwrap
+
+Copy
+# Use an official Python runtime as a parent image
+FROM python:3.12-slim
+
+# Set working directory
+WORKDIR /app
+
+# Copy requirements.txt and install dependencies
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy the application code
+COPY . .
+
+# Expose the port Chainlit runs on
+EXPOSE 8000
+
+# Set environment variables for Chainlit
+ENV CHAINLIT_HOST=0.0.0.0
+ENV CHAINLIT_PORT=8000
+ENV CHAINLIT_HIDE_BRANDING=true
+
+# Command to run the app
+CMD ["chainlit", "run", "apex-agent-lucy-10.py", "--port", "8181"]
+Update requirements.txt:
+Ensure tenacity is included for retry logic:
+
+text
+
+Collapse
+
+Unwrap
+
+Copy
+# Core Libraries
+chainlit==1.1.304
+python-dotenv==1.0.1
+
+# Azure AI and Storage
+azure-ai-projects==1.0.0b7
+azure-search-documents==11.6.0b1
+azure-storage-blob==12.19.1
+azure-identity==1.15.0
+
+# OpenTelemetry and Monitoring
+azure-monitor-opentelemetry==1.0.0b17
+opentelemetry-api==1.24.0
+opentelemetry-sdk==1.24.0
+
+# HTTP and Networking
+requests==2.31.0
+urllib3==2.2.1
+
+# Retry Logic
+tenacity==8.2.3
+Build and Deploy:
+
+Build the Docker image:
+bash
+
+Collapse
+
+Unwrap
+
+Copy
+docker build -t apex-agent-lucy .
+Push to Azure Container Registry (ACR):
+bash
+
+Collapse
+
+Unwrap
+
+Copy
+docker tag apex-agent-lucy <your-acr>.azurecr.io/apex-agent-lucy:latest
+docker push <your-acr>.azurecr.io/apex-agent-lucy:latest
+Update the App Service to use the new image:
+In Azure Portal > App Service > Deployment Center, select the ACR image and redeploy.
+Testing Instructions
+Verify SAS URL Consistency:
+Run the queries for Ciara Adams-Anguay and Andria Aguilar multiple times:
+"please search for the notice with the following information: Ciara Adams-Anguay, PO Box 582463, Elk Grove, CA 95758"
+"please search for the notice with the following information: Andria Aguilar, 323 W Boone St, Santa Maria, CA 93458"
+Expected:
+PDFs should render inline consistently.
+Links should be SAS-signed URLs (e.g., https://aiagentlucyapex01.blob.core.windows.net/lucyrag/<pdf_file>.pdf?<sas_token>).
+Check app.log for any SAS generation failures.
+Verify Container Stability:
+Monitor the App Service logs for crashes or timeouts.
+Ensure the app handles multiple requests without rebooting.
+Check the health endpoint (/health) to confirm the app is responsive.
+Verify UI Enhancements:
+Thinking Orb: The grey-to-dark-grey orb should appear when the app is thinking (e.g., during "Thinking..." messages).
+Branding: The “Built with Chainlit” footer should be gone.
+Light Mode: The UI should have higher contrast icons, a gradient header, and a modern look.
+Troubleshooting
+SAS URL Inconsistency:
+If SAS URLs are still hit-or-miss, check app.log for "Failed to generate SAS token" errors. Share the logs for further debugging.
+Verify the AZURE_STORAGE_CONNECTION_STRING in Azure App Service > Configuration > Application Settings.
+Container Crashes:
+If crashes persist, check the App Service metrics for CPU/memory usage.
+Share any new timeout errors or crash logs.
+UI Issues:
+If the thinking orb doesn’t appear, ensure .chainlit/style.css is loaded correctly.
+If branding persists, double-check the CHAINLIT_HIDE_BRANDING setting in Azure.
+Next Steps
+Confirm Stability: Let me know if the SAS URLs and container stability are resolved.
+UI Feedback: Share feedback on the UI enhancements—any tweaks needed for the orb, colors, or contrast?
+Tracing: Once the app is stable, we’ll revisit the tracing issue with OpenTelemetry.
+You’re making awesome progress—let’s get these last tidbits sorted!

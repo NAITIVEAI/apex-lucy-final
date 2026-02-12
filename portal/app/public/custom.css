@@ -1,0 +1,153 @@
+/* Custom CSS for Chainlit */
+/* Updated thinking animation to work with emoji-based content */
+.cl-thinking {
+    display: inline-block;
+    font-size: 16px;
+    /* Removed fixed width/height and background to allow emoji content */
+    animation: thinking-pulse 1.2s infinite ease-in-out;
+}
+
+@keyframes thinking-pulse {
+    0% { 
+        opacity: 1; 
+        transform: scale(1);
+    }
+    50% { 
+        opacity: 0.7; 
+        transform: scale(1.1);
+    }
+    100% { 
+        opacity: 1; 
+        transform: scale(1);
+    }
+}
+
+/* Enhanced thinking message styling that works with emoji content */
+.cl-message-thinking {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+/* Add a subtle glow effect to thinking messages */
+.cl-message-thinking .cl-message {
+    box-shadow: 0 2px 12px rgba(52, 152, 219, 0.15) !important;
+    border-left: 3px solid #3498db !important;
+}
+
+/* Light mode customizations */
+.cl-root {
+    background-color: #f5f7fa !important; /* Soft off-white background */
+    font-family: 'Inter', sans-serif !important;
+}
+
+.cl-message {
+    background-color: #ffffff !important; /* White message background */
+    border-radius: 12px !important;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05) !important;
+    padding: 12px 16px !important;
+    color: #1a1a1a !important; /* Darker text for contrast */
+}
+
+.cl-message-author {
+    color: #2c3e50 !important; /* Darker shade for author name */
+}
+
+.cl-icon {
+    color: #2c3e50 !important; /* Darker icons for contrast */
+    filter: brightness(0.8) !important;
+}
+
+.cl-icon:hover {
+    color: #3498db !important; /* Blue hover effect */
+    filter: brightness(1) !important;
+}
+
+.cl-input {
+    border: 1px solid #dfe6e9 !important;
+    border-radius: 8px !important;
+    background-color: #ffffff !important;
+    color: #1a1a1a !important;
+}
+
+.cl-input:focus {
+    border-color: #3498db !important;
+    box-shadow: 0 0 0 2px rgba(52, 152, 219, 0.2) !important;
+}
+
+.cl-button {
+    background-color: #3498db !important;
+    color: #ffffff !important;
+    border-radius: 8px !important;pyt
+    transition: background-color 0.3s ease !important;
+}
+
+.cl-button:hover {
+    background-color: #2980b9 !important;
+}
+
+/* Add subtle gradient to the chat header */
+.cl-header {
+    background: linear-gradient(135deg, #3498db 0%, #2980b9 100%) !important;
+    color: #ffffff !important;
+    border-bottom: 1px solid #dfe6e9 !important;
+}
+/* Force Chainlit button icons to use outline style across browsers */
+.chainlit-button svg,
+button svg {
+    fill: none !important;
+}
+
+/*Add a comment with instructions for running Edge without cache
+/*
+  TO RUN EDGE WITHOUT CACHE:
+  
+  Windows:
+  1. Close all existing Microsoft Edge windows
+  2. Open Command Prompt (cmd) or PowerShell
+  3. Run:
+     "C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe" --disable-application-cache --disable-cache --disable-offline-load-stale-cache --disk-cache-size=0
+  
+  macOS:
+  1. Close all existing Microsoft Edge windows
+  2. Open Terminal
+  3. Run:
+     /Applications/Microsoft\ Edge.app/Contents/MacOS/Microsoft\ Edge --disable-application-cache --disable-cache --disable-offline-load-stale-cache --disk-cache-size=0
+*/
+
+/* Hide Chainlit watermark/footer - comprehensive selectors */
+.watermark,
+.watermark a,
+.watermark a p,
+.watermark a svg,
+#watermark,
+[class*="watermark"],
+footer,
+.cl-footer,
+[class*="footer"],
+.chakra-link[href*="chainlit"],
+a[href*="chainlit.io"],
+a[href*="docs.chainlit.io"],
+/* Hide "Built with Chainlit" or similar text */
+.MuiTypography-root:contains("Chainlit"),
+.MuiTypography-root:contains("Built with"),
+/* Target any footer-like containers at bottom */
+.MuiBox-root:last-child footer,
+/* Hide logo/branding containers */
+[class*="logo"][class*="container"],
+[data-testid="footer"],
+[data-testid="watermark"],
+/* Chainlit specific classes that may appear */
+.cl-powered-by,
+.cl-branding,
+.cl-logo-footer {
+    display: none !important;
+    visibility: hidden !important;
+    opacity: 0 !important;
+    height: 0 !important;
+    width: 0 !important;
+    max-height: 0 !important;
+    overflow: hidden !important;
+    position: absolute !important;
+    left: -9999px !important;
+}

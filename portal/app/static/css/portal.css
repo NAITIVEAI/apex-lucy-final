@@ -1,0 +1,150 @@
+/* Custom styles for the agent portal */
+
+/* Fade in animation for elements */
+@keyframes fadeIn {
+    from { opacity: 0; transform: translateY(10px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+#pending-list tr {
+    animation: fadeIn 0.3s ease-out forwards;
+}
+
+/* Hover effect for table rows */
+#pending-list tr:hover {
+    background-color: #f9fafb;
+    transition: background-color 0.2s;
+}
+
+/* Status indicators */
+.status-indicator {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    margin-right: 6px;
+}
+
+.status-waiting {
+    background-color: #fbbf24; /* Amber/Yellow */
+}
+
+.status-active {
+    background-color: #10b981; /* Green */
+}
+
+.status-closed {
+    background-color: #6b7280; /* Gray */
+}
+
+/* Time formatting */
+.time-ago {
+    color: #6b7280;
+    font-size: 0.75rem;
+}
+
+/* Responsive table styles */
+@media (max-width: 1024px) {
+    #pending-container {
+        margin-left: -1rem;
+        margin-right: -1rem;
+    }
+}
+
+/* Sticky column styles for mobile */
+.sticky {
+    position: sticky !important;
+    z-index: 10;
+}
+
+th.sticky {
+    background-color: #f9fafb;
+}
+
+td.sticky {
+    background-color: white;
+}
+
+/* Shadow for sticky columns */
+.sticky.left-0::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    right: -1px;
+    bottom: 0;
+    width: 1px;
+    background: linear-gradient(to right, rgba(0, 0, 0, 0.1), transparent);
+}
+
+.sticky.right-0::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: -1px;
+    bottom: 0;
+    width: 1px;
+    background: linear-gradient(to left, rgba(0, 0, 0, 0.1), transparent);
+}
+
+/* Mobile-first responsive design */
+@media (max-width: 640px) {
+    #pending-container table {
+        font-size: 0.875rem;
+    }
+    
+    th, td {
+        padding: 0.5rem !important;
+    }
+    
+    /* Ensure Join button is always visible */
+    .action-cell {
+        min-width: 80px;
+    }
+}
+
+/* Button hover effects */
+#refresh-btn:hover {
+    transform: translateY(-1px);
+    transition: transform 0.2s;
+}
+
+/* Empty state styling */
+.empty-state {
+    text-align: center;
+    padding: 2rem;
+    color: #6b7280;
+}
+
+/* Timezone tooltip */
+.timezone-tooltip {
+    position: relative;
+    cursor: help;
+}
+
+.timezone-tooltip:hover::after {
+    content: attr(data-tooltip);
+    position: absolute;
+    bottom: 100%;
+    left: 50%;
+    transform: translateX(-50%);
+    background-color: #1f2937;
+    color: white;
+    padding: 0.25rem 0.5rem;
+    border-radius: 0.25rem;
+    font-size: 0.75rem;
+    white-space: nowrap;
+    z-index: 10;
+    margin-bottom: 0.25rem;
+}
+
+.timezone-tooltip:hover::before {
+    content: '';
+    position: absolute;
+    bottom: 100%;
+    left: 50%;
+    transform: translateX(-50%);
+    border: 5px solid transparent;
+    border-top-color: #1f2937;
+    margin-bottom: -0.25rem;
+    z-index: 10;
+} 

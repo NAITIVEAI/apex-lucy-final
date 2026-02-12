@@ -1,0 +1,336 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Apex Agent Portal</title>
+    <link
+      href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/static/css/portal.css" />
+    <link rel="icon" href="/public/favicon.png" />
+    <script>
+      // Store agent info for API calls
+      const agentId = "{{ agent.id }}";
+      const agentName = "{{ agent.name }}";
+    </script>
+  </head>
+  <body class="bg-gray-50 min-h-screen">
+    <nav class="bg-white shadow-sm">
+      <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+        <div
+          class="flex flex-col sm:flex-row justify-between sm:h-16 py-3 sm:py-0"
+        >
+          <div class="flex items-center mb-3 sm:mb-0">
+            <div class="flex-shrink-0 flex items-center">
+              <img
+                class="h-8 sm:h-10 w-auto"
+                src="/public/logo_light.png"
+                alt="Apex"
+              />
+            </div>
+            <div class="ml-4 sm:ml-6 flex items-center">
+              <h1 class="text-lg sm:text-xl font-semibold text-gray-900">
+                Agent Support Portal
+              </h1>
+            </div>
+          </div>
+          <div class="flex flex-wrap items-center gap-2 sm:gap-4">
+            <a
+              href="/agent/dashboard"
+              class="text-indigo-600 hover:text-indigo-900 text-sm font-medium"
+            >
+              📊 Dashboard
+            </a>
+            <span
+              class="text-sm text-gray-500 hidden lg:inline"
+              id="timezone-info"
+            ></span>
+            <span class="text-sm text-gray-500 hidden sm:inline"
+              >Agent: {{ agent.name }}</span
+            >
+            <button
+              id="refresh-btn"
+              class="inline-flex items-center px-3 py-2 border border-transparent text-sm leading-4 font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
+            >
+              Refresh
+            </button>
+          </div>
+        </div>
+      </div>
+    </nav>
+
+    <div class="max-w-7xl mx-auto py-6 sm:px-6 lg:px-8">
+      <div class="px-4 py-6 sm:px-0">
+        <div class="border border-gray-200 rounded-lg p-4 shadow-sm bg-white">
+          <div class="flex justify-between items-center mb-6">
+            <h2 class="text-lg font-medium text-gray-900">
+              Pending Support Requests
+            </h2>
+            <div class="text-sm text-gray-500" id="last-updated">
+              Last updated: Just now
+            </div>
+          </div>
+
+          <div id="pending-container" class="overflow-x-auto -mx-4 sm:mx-0">
+            <div class="inline-block min-w-full align-middle">
+              <div
+                class="overflow-hidden shadow ring-1 ring-black ring-opacity-5 md:rounded-lg"
+              >
+                <table class="min-w-full divide-y divide-gray-300">
+                  <thead class="bg-gray-50">
+                    <tr>
+                      <th
+                        scope="col"
+                        class="sticky left-0 z-10 bg-gray-50 px-3 py-3.5 text-left text-sm font-semibold text-gray-900"
+                      >
+                        User
+                      </th>
+                      <th
+                        scope="col"
+                        class="px-3 py-3.5 text-left text-sm font-semibold text-gray-900 hidden sm:table-cell"
+                      >
+                        Apex ID
+                      </th>
+                      <th
+                        scope="col"
+                        class="px-3 py-3.5 text-left text-sm font-semibold text-gray-900"
+                      >
+                        Reason
+                      </th>
+                      <th
+                        scope="col"
+                        class="px-3 py-3.5 text-left text-sm font-semibold text-gray-900 hidden lg:table-cell"
+                      >
+                        Time Requested
+                      </th>
+                      <th
+                        scope="col"
+                        class="px-3 py-3.5 text-left text-sm font-semibold text-gray-900 hidden md:table-cell"
+                      >
+                        Waiting Time
+                      </th>
+                      <th
+                        scope="col"
+                        class="px-3 py-3.5 text-left text-sm font-semibold text-gray-900 hidden xl:table-cell"
+                      >
+                        SLA Status
+                      </th>
+                      <th
+                        scope="col"
+                        class="px-3 py-3.5 text-left text-sm font-semibold text-gray-900 hidden sm:table-cell"
+                      >
+                        Status
+                      </th>
+                      <th
+                        scope="col"
+                        class="sticky right-0 z-10 bg-gray-50 px-3 py-3.5 text-center text-sm font-semibold text-gray-900"
+                      >
+                        Action
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody
+                    id="pending-list"
+                    class="bg-white divide-y divide-gray-200"
+                  >
+                    <tr>
+                      <td
+                        colspan="8"
+                        class="px-6 py-4 text-sm text-gray-500 text-center"
+                      >
+                        Loading conversations...
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+
+          <div id="no-pending" class="hidden mt-4 p-4 rounded-md bg-gray-50">
+            <div class="text-center">
+              <p class="text-sm text-gray-700">
+                No pending support requests at this time.
+              </p>
+              <p class="text-xs text-gray-500 mt-1">
+                Check back later or refresh the page.
+              </p>
+            </div>
+          </div>
+        </div>
+
+        <!-- Callback Requests Section -->
+        <div
+          class="mt-8 border border-gray-200 rounded-lg p-4 shadow-sm bg-white"
+        >
+          <div class="flex justify-between items-center mb-6">
+            <h2 class="text-lg font-medium text-gray-900">
+              📞 Callback Requests
+            </h2>
+            <div class="text-sm text-gray-500" id="callbacks-last-updated">
+              Last updated: Just now
+            </div>
+          </div>
+
+          <div id="callbacks-container">
+            <div class="overflow-hidden rounded-md border border-gray-200">
+              <table class="min-w-full divide-y divide-gray-200">
+                <thead class="bg-gray-50">
+                  <tr>
+                    <th
+                      scope="col"
+                      class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider"
+                    >
+                      Member
+                    </th>
+                    <th
+                      scope="col"
+                      class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider hidden sm:table-cell"
+                    >
+                      Phone
+                    </th>
+                    <th
+                      scope="col"
+                      class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider hidden md:table-cell"
+                    >
+                      Best Time
+                    </th>
+                    <th
+                      scope="col"
+                      class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider"
+                    >
+                      Reason
+                    </th>
+                    <th
+                      scope="col"
+                      class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider hidden lg:table-cell"
+                    >
+                      Requested
+                    </th>
+                    <th
+                      scope="col"
+                      class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider hidden sm:table-cell"
+                    >
+                      Status
+                    </th>
+                    <th scope="col" class="relative px-6 py-3">
+                      <span class="sr-only">Actions</span>
+                    </th>
+                  </tr>
+                </thead>
+                <tbody
+                  id="callbacks-list"
+                  class="bg-white divide-y divide-gray-200"
+                >
+                  <tr>
+                    <td
+                      colspan="7"
+                      class="px-6 py-4 text-sm text-gray-500 text-center"
+                    >
+                      Loading callback requests...
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <div id="no-callbacks" class="hidden mt-4 p-4 rounded-md bg-gray-50">
+            <div class="text-center">
+              <p class="text-sm text-gray-700">
+                No pending callback requests at this time.
+              </p>
+              <p class="text-xs text-gray-500 mt-1">
+                All callbacks have been completed.
+              </p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Complete Callback Modal -->
+    <div
+      id="complete-modal"
+      class="hidden fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50"
+    >
+      <div
+        class="relative top-20 mx-auto p-5 border w-96 shadow-lg rounded-md bg-white"
+      >
+        <div class="mt-3">
+          <h3 class="text-lg font-medium text-gray-900 mb-4">
+            Complete Callback
+          </h3>
+          <div class="mb-4">
+            <label
+              for="callback-notes"
+              class="block text-sm font-medium text-gray-700 mb-2"
+            >
+              Notes from the call:
+            </label>
+            <textarea
+              id="callback-notes"
+              rows="4"
+              class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-indigo-500 focus:border-indigo-500"
+              placeholder="Enter details about the call, resolution, or follow-up needed..."
+            ></textarea>
+            <div class="mt-2">
+              <button
+                id="ai-assist-btn"
+                type="button"
+                class="text-sm text-indigo-600 hover:text-indigo-500 flex items-center"
+              >
+                <svg
+                  class="w-4 h-4 mr-1"
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                >
+                  <path
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    stroke-width="2"
+                    d="M13 10V3L4 14h7v7l9-11h-7z"
+                  ></path>
+                </svg>
+                AI Assist - Summarize conversation
+              </button>
+            </div>
+          </div>
+          <div class="flex justify-end space-x-3">
+            <button
+              id="cancel-complete"
+              class="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
+            >
+              Cancel
+            </button>
+            <button
+              id="confirm-complete"
+              class="px-4 py-2 text-sm font-medium text-white bg-green-600 border border-transparent rounded-md hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500"
+            >
+              Complete Callback
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <footer class="bg-white shadow-inner mt-8">
+      <div class="max-w-7xl mx-auto py-4 px-4 sm:px-6 lg:px-8">
+        <div class="flex flex-col sm:flex-row items-center justify-between">
+          <p class="text-center text-sm text-gray-500">
+            &copy; 2024 Apex Class Action. All rights reserved.
+          </p>
+          <div class="text-xs text-gray-400 mt-2 sm:mt-0">
+            <span class="mr-3">Build: {{ build_version }}</span>
+            <span>Callback: {{ callback_system_version }}</span>
+          </div>
+        </div>
+      </div>
+    </footer>
+
+    <script src="/static/js/portal.js"></script>
+  </body>
+</html>

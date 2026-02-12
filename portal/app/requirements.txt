@@ -1,0 +1,30 @@
+chainlit==2.9.5
+python-dotenv==1.1.0
+azure-ai-projects==1.0.0b11
+azure-search-documents==11.5.2
+azure-storage-blob==12.25.1
+azure-ai-agents==1.0.0
+azure-identity==1.23.0
+azure-core==1.34.0
+requests==2.32.3
+urllib3==2.4.0
+tenacity==9.1.2
+openai==1.84.0
+aiohttp==3.12.9
+PyPDF2==3.0.1
+# Simplified OpenTelemetry setup - only what's needed
+azure-monitor-opentelemetry==1.6.10
+# azure-monitor-opentelemetry will pull in the correct versions of:
+# - opentelemetry-api
+# - opentelemetry-sdk
+# - opentelemetry-instrumentation
+# - azure-core-tracing-opentelemetry
+botbuilder-schema==4.17.0  # Required for Teams integration in Chainlit
+botbuilder-core==4.17.0  # Required for Teams integration in Chainlit
+fastapi==0.116.1  # For agent portal
+uvicorn==0.35.0  # For agent portal
+websockets==15.0.1  # For agent portal websocket support
+jinja2==3.1.6  # For agent portal templates
+python-multipart==0.0.18  # For agent portal file uploads
+pytz==2025.2  # For timezone handling in get_current_datetime_sync
+azure-data-tables==12.7.0  # For callback system Azure Tables storage

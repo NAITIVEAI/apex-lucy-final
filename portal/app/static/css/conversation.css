@@ -1,0 +1,168 @@
+/* Custom styles for conversation page */
+
+/* Message container */
+#messages-container {
+    scroll-behavior: smooth;
+}
+
+/* Message wrapper */
+.message-wrapper {
+    display: flex;
+    margin-bottom: 1rem;
+    animation: fadeIn 0.3s ease-out forwards;
+}
+
+@keyframes fadeIn {
+    from { opacity: 0; transform: translateY(10px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+/* Message bubbles */
+.user-message, .agent-message, .assistant-message, .system-message {
+    max-width: 80%;
+    padding: 0.75rem 1rem;
+    border-radius: 0.5rem;
+    position: relative;
+}
+
+.user-message {
+    background-color: #f3f4f6;
+    border: 1px solid #e5e7eb;
+    margin-right: auto;
+    border-top-left-radius: 0;
+}
+
+.agent-message {
+    background-color: #dbeafe;
+    border: 1px solid #bfdbfe;
+    margin-left: auto;
+    border-top-right-radius: 0;
+}
+
+.assistant-message {
+    background-color: #e0e7ff;
+    border: 1px solid #c7d2fe;
+    margin-right: auto;
+    border-top-left-radius: 0;
+}
+
+.system-message {
+    background-color: #fffbeb;
+    border: 1px solid #fef3c7;
+    margin: 0 auto;
+    text-align: center;
+    font-style: italic;
+}
+
+/* Message headers */
+.message-header {
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: 0.25rem;
+}
+
+.message-author {
+    font-weight: 500;
+    font-size: 0.875rem;
+    color: #374151;
+}
+
+.message-time {
+    font-size: 0.75rem;
+    color: #6b7280;
+}
+
+/* Message content */
+.message-content {
+    font-size: 0.9375rem;
+    line-height: 1.5;
+    color: #1f2937;
+    word-break: break-word;
+}
+
+.message-content p {
+    margin: 0.4rem 0;
+}
+
+.message-content ul,
+.message-content ol {
+    margin: 0.4rem 0 0.4rem 1.25rem;
+    padding-left: 1rem;
+}
+
+.message-content li {
+    margin: 0.2rem 0;
+}
+
+.message-content code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+    font-size: 0.85rem;
+    background: #f3f4f6;
+    padding: 0.1rem 0.3rem;
+    border-radius: 0.25rem;
+}
+
+.message-content pre {
+    background: #111827;
+    color: #f9fafb;
+    padding: 0.75rem 1rem;
+    border-radius: 0.5rem;
+    overflow-x: auto;
+    margin: 0.5rem 0;
+}
+
+.message-content pre code {
+    background: transparent;
+    color: inherit;
+    padding: 0;
+}
+
+.message-content a {
+    color: #2563eb;
+    text-decoration: underline;
+}
+
+/* Connection status */
+#connection-indicator {
+    transition: all 0.3s ease;
+}
+
+/* Connected state */
+.connected .connection-dot {
+    background-color: #10b981;
+}
+
+.connected .connection-text {
+    color: #10b981;
+}
+
+/* Disconnected state */
+.disconnected .connection-dot {
+    background-color: #ef4444;
+}
+
+.disconnected .connection-text {
+    color: #ef4444;
+}
+
+/* Textarea and button */
+#message-input {
+    resize: none;
+    transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+#send-button {
+    transition: background-color 0.2s, transform 0.1s;
+}
+
+#send-button:active {
+    transform: scale(0.98);
+}
+
+/* Quick responses */
+.quick-response {
+    transition: background-color 0.2s;
+    text-overflow: ellipsis;
+    overflow: hidden;
+    white-space: nowrap;
+} 
