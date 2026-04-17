@@ -37,6 +37,7 @@ node_modules/
 .claude-flow/
 .gemini/
 .swarm/
+.omx/
 
 # OpenMemory - IDE/Assistant specific rules
 .cursor/rules/openmemory.mdc
