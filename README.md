@@ -26,6 +26,8 @@ Environment values are provided via `.env.example` templates:
 
 Recommended production posture:
 - Inject secrets from managed secret stores (for example, Azure Container Apps secrets / Key Vault references)
+- Publish prompt-agent updates through the Foundry Agent Application / Managed deployment layer so the portal and runtime stay on the same version
+- Set `FOUNDRY_APPLICATION_NAME` explicitly when the published application name should differ from the logical agent name
 - Set `AGENT_PORTAL_API_TOKEN` for portal request authentication
 - Keep `ENABLE_DEBUG_ENDPOINTS` unset or `false` in production
 

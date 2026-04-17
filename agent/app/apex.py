@@ -31,6 +31,15 @@ from foundry_v2 import (
     build_prompt_agent_definition,
     build_agent_reference,
 )
+from foundry_publish import (
+    PublishedDeploymentState,
+    get_application_name,
+    get_latest_published_deployment_state,
+    get_published_deployment_state,
+    parse_project_scope_from_connection_id,
+    reconcile_managed_publication,
+    select_effective_agent_version,
+)
 from foundry_v2_runtime import (
     build_response_payload,
     get_project_openai_client,
@@ -2663,6 +2672,24 @@ def _get_agent_name() -> str:
     return os.getenv("FOUNDRY_AGENT_NAME") or "lucy"
 
 
+def _get_application_name() -> str:
+    return get_application_name(_get_agent_name())
+
+
+def _fallback_publication_state(
+    application_name: str,
+    agent_name_value: str,
+    agent_version_value: str,
+) -> PublishedDeploymentState:
+    return PublishedDeploymentState(
+        application_name=application_name,
+        deployment_name="",
+        deployment_id="",
+        agent_name=agent_name_value,
+        agent_version=str(agent_version_value),
+    )
+
+
 _INDEX_NAME_PATTERN = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,126}[a-z0-9])?$")
 
 
@@ -2820,6 +2847,7 @@ async def _initialize_persistent_agent_v2():
         agent_registry = AgentRegistry()
 
     registry_partition = _get_agent_name()
+    application_name = _get_application_name()
 
     model_deployment = _get_model_deployment_name()
     search_index_name = _get_search_index_name()
@@ -2831,6 +2859,7 @@ async def _initialize_persistent_agent_v2():
         _get_search_connection_name_env(),
         project_client,
     )
+    project_scope = parse_project_scope_from_connection_id(connection_id)
 
     query_type = os.getenv("SEARCH_QUERY_TYPE")
     top_k = os.getenv("SEARCH_TOP_K")
@@ -2842,6 +2871,23 @@ async def _initialize_persistent_agent_v2():
     prompt_hash = compute_prompt_hash()
 
     record = agent_registry.get_agent_record(registry_partition, "persistent")
+    published_state = None
+    latest_published_state = None
+    try:
+        published_state = get_published_deployment_state(
+            project_scope,
+            application_name,
+            credential,
+        )
+        latest_published_state = get_latest_published_deployment_state(
+            project_scope,
+            application_name,
+            credential,
+            agent_name=registry_partition,
+        )
+    except Exception as publish_error:
+        logger.warning("⚠️ Failed to read Foundry publication state: %s", publish_error)
+
     if record and record.get("agent_name") and record.get("agent_version"):
         mismatch_reasons = []
         if record.get("search_index_name") != search_index_name:
@@ -2859,13 +2905,80 @@ async def _initialize_persistent_agent_v2():
         if prompt_hash_changed(record, prompt_hash):
             mismatch_reasons.append("prompt_hash")
 
-        if not mismatch_reasons:
-            agent_name = record.get("agent_name")
-            agent_version = record.get("agent_version")
+        if (
+            published_state
+            and str(record.get("agent_version") or "") != published_state.agent_version
+        ):
+            logger.warning(
+                "⚠️ Foundry registry drift detected: table=%s:%s published=%s:%s deployment=%s",
+                record.get("agent_name"),
+                record.get("agent_version"),
+                published_state.agent_name,
+                published_state.agent_version,
+                published_state.deployment_name,
+            )
+        if (
+            latest_published_state
+            and published_state
+            and latest_published_state.agent_version != published_state.agent_version
+        ):
+            logger.warning(
+                "⚠️ Foundry application routing is stale: active=%s latest=%s",
+                published_state.agent_version,
+                latest_published_state.agent_version,
+            )
+
+        effective_version = select_effective_agent_version(
+            record,
+            published_state,
+            mismatch_reasons,
+            latest_published_state,
+        )
+        if effective_version:
+            try:
+                publication_state = reconcile_managed_publication(
+                    project_scope,
+                    application_name,
+                    registry_partition,
+                    effective_version,
+                    credential,
+                )
+            except Exception as publish_error:
+                logger.warning(
+                    "⚠️ Foundry publication reconciliation failed; using project agent version directly: %s",
+                    publish_error,
+                )
+                publication_state = _fallback_publication_state(
+                    application_name,
+                    registry_partition,
+                    effective_version,
+                )
+            agent_name = registry_partition
+            agent_version = publication_state.agent_version
+            agent_registry.upsert_agent_record(
+                registry_partition,
+                "persistent",
+                {
+                    "agent_name": agent_name,
+                    "agent_version": agent_version,
+                    "application_name": publication_state.application_name,
+                    "deployment_name": publication_state.deployment_name,
+                    "deployment_id": publication_state.deployment_id,
+                    "search_index_name": search_index_name,
+                    "search_connection_id": connection_id,
+                    "model_deployment": model_deployment,
+                    "query_type": query_type or "",
+                    "top_k": top_k_value if top_k_value is not None else "",
+                    "toolset_signature": toolset_signature,
+                    "prompt_hash": prompt_hash,
+                },
+            )
             logger.info(
-                "✅ Foundry v2 agent loaded from registry: %s:%s",
+                "✅ Foundry v2 agent loaded from reconciled publication state: %s:%s (%s/%s)",
                 agent_name,
                 agent_version,
+                publication_state.application_name,
+                publication_state.deployment_name,
             )
             return True
 
@@ -2897,13 +3010,34 @@ async def _initialize_persistent_agent_v2():
     )
 
     agent_name = new_agent.name
-    agent_version = new_agent.version
+    try:
+        publication_state = reconcile_managed_publication(
+            project_scope,
+            application_name,
+            registry_partition,
+            str(new_agent.version),
+            credential,
+        )
+    except Exception as publish_error:
+        logger.warning(
+            "⚠️ Foundry publication creation failed; continuing with project agent version directly: %s",
+            publish_error,
+        )
+        publication_state = _fallback_publication_state(
+            application_name,
+            registry_partition,
+            str(new_agent.version),
+        )
+    agent_version = publication_state.agent_version
     agent_registry.upsert_agent_record(
         registry_partition,
         "persistent",
         {
             "agent_name": agent_name,
             "agent_version": agent_version,
+            "application_name": publication_state.application_name,
+            "deployment_name": publication_state.deployment_name,
+            "deployment_id": publication_state.deployment_id,
             "search_index_name": search_index_name,
             "search_connection_id": connection_id,
             "model_deployment": model_deployment,
@@ -2913,7 +3047,13 @@ async def _initialize_persistent_agent_v2():
             "prompt_hash": prompt_hash,
         },
     )
-    logger.info(f"✅ Created Foundry v2 agent {agent_name}:{agent_version}")
+    logger.info(
+        "✅ Created Foundry v2 agent %s:%s and reconciled application %s deployment %s",
+        agent_name,
+        agent_version,
+        publication_state.application_name,
+        publication_state.deployment_name,
+    )
     return True
 
 
