@@ -1,0 +1,110 @@
+{
+  "version": "1.0.0",
+  "lastScanned": 1777114466242,
+  "projectRoot": "/Users/chris/ai/Apex-Lucy-Final",
+  "techStack": {
+    "languages": [],
+    "frameworks": [],
+    "packageManager": null,
+    "runtime": null
+  },
+  "build": {
+    "buildCommand": null,
+    "testCommand": null,
+    "lintCommand": null,
+    "devCommand": null,
+    "scripts": {}
+  },
+  "conventions": {
+    "namingStyle": null,
+    "importStyle": null,
+    "testPattern": null,
+    "fileOrganization": null
+  },
+  "structure": {
+    "isMonorepo": false,
+    "workspaces": [],
+    "mainDirectories": [
+      "docs"
+    ],
+    "gitBranches": {
+      "defaultBranch": "main",
+      "branchingStrategy": null
+    }
+  },
+  "customNotes": [],
+  "directoryMap": {
+    "agent": {
+      "path": "agent",
+      "purpose": null,
+      "fileCount": 2,
+      "lastAccessed": 1777114466233,
+      "keyFiles": [
+        "requirements-dev.txt"
+      ]
+    },
+    "docs": {
+      "path": "docs",
+      "purpose": "Documentation",
+      "fileCount": 1,
+      "lastAccessed": 1777114466238,
+      "keyFiles": []
+    },
+    "plans": {
+      "path": "plans",
+      "purpose": null,
+      "fileCount": 0,
+      "lastAccessed": 1777114466238,
+      "keyFiles": []
+    },
+    "portal": {
+      "path": "portal",
+      "purpose": null,
+      "fileCount": 1,
+      "lastAccessed": 1777114466238,
+      "keyFiles": []
+    },
+    "state": {
+      "path": "state",
+      "purpose": null,
+      "fileCount": 0,
+      "lastAccessed": 1777114466238,
+      "keyFiles": []
+    },
+    "agent/app": {
+      "path": "agent/app",
+      "purpose": "Application code",
+      "fileCount": 36,
+      "lastAccessed": 1777114466239,
+      "keyFiles": [
+        "Dockerfile",
+        "You are a helpful assist.textClipping",
+        "__init__.py"
+      ]
+    },
+    "agent/tests": {
+      "path": "agent/tests",
+      "purpose": "Test files",
+      "fileCount": 9,
+      "lastAccessed": 1777114466239,
+      "keyFiles": [
+        "test_agent_reference_payload.py",
+        "test_agent_registry.py",
+        "test_foundry_publish.py"
+      ]
+    },
+    "portal/app": {
+      "path": "portal/app",
+      "purpose": "Application code",
+      "fileCount": 12,
+      "lastAccessed": 1777114466239,
+      "keyFiles": [
+        "Dockerfile",
+        "agent_portal.py",
+        "agentic_monitoring.py"
+      ]
+    }
+  },
+  "hotPaths": [],
+  "userDirectives": []
+}
