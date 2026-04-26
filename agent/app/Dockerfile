@@ -33,8 +33,9 @@ RUN ls -la /app/callback_system.py /app/conversation_store.py && \
 ENV PYTHONPATH=/app
 
 
-# Expose ports for Chainlit and health checks
-EXPOSE 8000 8080
+# Expose ports for Chainlit, health checks, and the FastAPI HTTP wrapper
+# that registers behind the Foundry AI Gateway (lucy_core.http_app).
+EXPOSE 8000 8080 8002
 
 # Set environment variables for Chainlit and Azure authentication
 ENV CHAINLIT_HOST=0.0.0.0

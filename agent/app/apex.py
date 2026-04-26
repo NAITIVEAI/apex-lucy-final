@@ -48,6 +48,23 @@ from foundry_v2_runtime import (
     use_foundry_v2,
 )
 from response_utils import extract_response_text
+from lucy_core.tool_registry import (
+    build_function_registry as _lucy_build_function_registry,
+    build_lucy_function_list as _lucy_build_function_list,
+    toolset_signature as _lucy_toolset_signature,
+)
+from lucy_core.responses_loop import (
+    build_authenticated_state_items as _lucy_build_authenticated_state_items,
+    execute_v2_tool_call as _lucy_execute_v2_tool_call,
+    extract_v2_function_calls as _lucy_extract_v2_function_calls,
+    run_response_v2 as _lucy_run_response_v2,
+)
+from lucy_core.session import LucySession as _LucySession
+from foundry_init import (
+    FoundryInitContext,
+    get_model_deployment_name,
+    initialize_foundry_v2_agent,
+)
 from response_config import should_include_max_output_tokens
 from tracing_utils import get_status_classes
 from prompt_utils import compute_prompt_hash, prompt_hash_changed
@@ -2659,680 +2676,133 @@ async def extract_text_from_pdf(sas_url: str) -> str:
     return "PDF text extraction disabled - using native RAG content from search index."
 
 
-def _get_model_deployment_name() -> str:
-    return (
-        os.getenv("MODEL_DEPLOYMENT_NAME")
-        or os.getenv("AZURE_AGENT_MODEL")
-        or os.getenv("AZURE_GPT_MODEL")
-        or "gpt-4.1"
-    )
-
-
-def _get_agent_name() -> str:
-    return os.getenv("FOUNDRY_AGENT_NAME") or "lucy"
-
-
-def _get_application_name() -> str:
-    return get_application_name(_get_agent_name())
-
-
-def _fallback_publication_state(
-    application_name: str,
-    agent_name_value: str,
-    agent_version_value: str,
-) -> PublishedDeploymentState:
-    return PublishedDeploymentState(
-        application_name=application_name,
-        deployment_name="",
-        deployment_id="",
-        agent_name=agent_name_value,
-        agent_version=str(agent_version_value),
-    )
-
-
-_INDEX_NAME_PATTERN = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,126}[a-z0-9])?$")
-
-
-def _normalize_search_index_name(value: str) -> str:
-    cleaned = (value or "").strip().lower()
-    if not cleaned:
-        return ""
-    if cleaned != value:
-        logger.warning("Normalized search index name from '%s' to '%s'", value, cleaned)
-    if not _INDEX_NAME_PATTERN.match(cleaned):
-        raise ValueError(
-            "AI Search index name must be lowercase letters, digits, or dashes, "
-            "not start/end with a dash, and be <= 128 characters."
-        )
-    return cleaned
-
-
-def _get_search_index_name() -> str:
-    raw = os.getenv("AI_SEARCH_INDEX_NAME") or os.getenv("AZURE_SEARCH_INDEX_NAME") or ""
-    return _normalize_search_index_name(raw)
-
-
-def _get_search_connection_id_env() -> Optional[str]:
-    return os.getenv("AI_SEARCH_PROJECT_CONNECTION_ID")
-
-
-def _get_search_connection_name_env() -> Optional[str]:
-    return (
-        os.getenv("AI_SEARCH_PROJECT_CONNECTION_NAME")
-        or os.getenv("AI_AZURE_AI_CONNECTION_ID")
-    )
+# Foundry v2 init helpers moved to foundry_init.py (2026-04-25)
+# get_model_deployment_name, get_agent_name, get_application_name_for_agent,
+# get_search_index_name, get_search_connection_id_env, get_search_connection_name_env,
+# fallback_publication_state, _normalize_search_index_name now live there.
 
 
 def _build_lucy_function_list() -> List[Any]:
-    functions: List[Any] = []
-    if setup_dynamics_functions is None:
-        logger.warning("⚠️ setup_dynamics_functions not available; no Dynamics tools registered")
-    else:
-        functions.extend(setup_dynamics_functions())
+    """Thin adapter — delegates to lucy_core.tool_registry.build_lucy_function_list.
 
-    # Core helper tools used by Lucy
-    functions.extend(
-        [
+    Lazy-imports setup_handoff_functions to preserve prior import-error tolerance.
+    """
+    try:
+        from user_functions import setup_handoff_functions as _setup_handoff
+    except Exception as handoff_import_error:
+        logger.warning(f"⚠️ Could not import setup_handoff_functions: {handoff_import_error}")
+        _setup_handoff = None
+
+    return _lucy_build_function_list(
+        setup_dynamics_fn=setup_dynamics_functions,
+        core_helpers=[
             generate_sas_url,
             render_pdf,
             get_current_datetime,
             execute_search_tool,
             extract_text_from_pdf_tool,
             analyze_pdf_content_tool,
-        ]
+        ],
+        setup_handoff_fn=_setup_handoff,
     )
-
-    try:
-        from user_functions import setup_handoff_functions
-        functions.extend(setup_handoff_functions())
-        logger.info("✅ Added handoff functions to v2 toolset")
-    except Exception as handoff_import_error:
-        logger.warning(f"⚠️ Could not add handoff functions: {handoff_import_error}")
-
-    return functions
 
 
 def _build_function_registry(functions: List[Any]) -> Dict[str, Any]:
-    registry: Dict[str, Any] = {}
-    for func in functions:
-        if not callable(func):
-            continue
-        name = getattr(func, "__name__", None) or ""
-        if not name:
-            continue
-        if name in registry:
-            logger.warning("⚠️ Duplicate tool name detected: %s (overwriting)", name)
-        registry[name] = func
-    return registry
+    return _lucy_build_function_registry(functions)
 
 
 def _toolset_signature(functions: List[Any]) -> str:
-    names = []
-    for func in functions:
-        if not callable(func):
-            continue
-        name = getattr(func, "__name__", None)
-        if name:
-            names.append(name)
-    joined = ",".join(sorted(names))
-    return hashlib.sha256(joined.encode("utf-8")).hexdigest()
+    return _lucy_toolset_signature(functions)
 
 
 def _build_authenticated_state_items() -> List[Dict[str, Any]]:
-    """Inject authenticated state into Responses input to avoid re-auth loops."""
-    items: List[Dict[str, Any]] = []
-    if not cl.user_session.get("authenticated"):
-        return items
-    apex_id = cl.user_session.get("apex_id")
-    if not apex_id:
-        return items
-    user_name = cl.user_session.get("user_name") or ""
-    content = (
-        "User is already authenticated. "
-        f"Apex ID: {apex_id}. "
-        f"Name: {user_name}."
-        " Do NOT ask for authentication again. Use the Apex ID for any member lookup."
+    """Thin adapter — builds a LucySession from cl.user_session and delegates to lucy_core."""
+    session = _LucySession(
+        session_id="chainlit",
+        authenticated=bool(cl.user_session.get("authenticated")),
+        apex_id=cl.user_session.get("apex_id"),
+        user_name=cl.user_session.get("user_name"),
     )
-    items.append(
-        {
-            "type": "message",
-            "role": "system",
-            "content": content,
-        }
-    )
-    return items
+    return _lucy_build_authenticated_state_items(session)
 
 
 async def _initialize_persistent_agent_v2():
-    """Initialize Foundry v2 persistent agent using Responses API + AI Search tool."""
+    """Thin adapter — delegates Foundry v2 init to foundry_init.initialize_foundry_v2_agent
+    and populates apex.py module globals from the returned context."""
     global project_client, openai_client, agent_registry, agent_name, agent_version, v2_function_registry
 
     if agent_name and agent_version and project_client and openai_client:
         return True
 
-    project_endpoint = (
-        os.getenv("AZURE_AI_FOUNDRY_PROJECT_ENDPOINT")
-        or os.getenv("AZURE_AI_PROJECT_ENDPOINT")
-    )
-    if not project_endpoint:
-        raise ValueError("AZURE_AI_FOUNDRY_PROJECT_ENDPOINT is required for Foundry v2")
-
-    from azure.identity import DefaultAzureCredential, ManagedIdentityCredential
-    from azure.ai.projects import AIProjectClient
-
-    logger.debug("[DEBUG] Checking if running in container for v2 credentials...")
-    is_container = any(
-        [
-            os.getenv("CONTAINER_APP_NAME"),
-            os.getenv("CONTAINER_APP_REVISION"),
-            os.getenv("WEBSITE_SITE_NAME"),
-            os.getenv("WEBSITES_PORT"),
-            os.getenv("KUBERNETES_SERVICE_HOST"),
-            os.path.exists("/.dockerenv"),
-        ]
-    )
-    if is_container:
-        logger.info("Container environment detected. Using managed identity for Foundry v2.")
-        managed_identity_client_id = os.getenv("MANAGED_IDENTITY_CLIENT_ID")
-        if managed_identity_client_id:
-            credential = ManagedIdentityCredential(client_id=managed_identity_client_id)
-        else:
-            credential = ManagedIdentityCredential()
-    else:
-        credential = DefaultAzureCredential(exclude_interactive_browser_credential=True)
-    project_client = AIProjectClient(endpoint=project_endpoint, credential=credential)
-    openai_client = get_project_openai_client(project_client)
-
-    if agent_registry is None:
-        agent_registry = AgentRegistry()
-
-    registry_partition = _get_agent_name()
-    application_name = _get_application_name()
-
-    model_deployment = _get_model_deployment_name()
-    search_index_name = _get_search_index_name()
-    if not search_index_name:
-        raise ValueError("AI_SEARCH_INDEX_NAME (or AZURE_SEARCH_INDEX_NAME) is required")
-
-    connection_id = resolve_search_connection_id(
-        _get_search_connection_id_env(),
-        _get_search_connection_name_env(),
-        project_client,
-    )
-    project_scope = parse_project_scope_from_connection_id(connection_id)
-
-    query_type = os.getenv("SEARCH_QUERY_TYPE")
-    top_k = os.getenv("SEARCH_TOP_K")
-    top_k_value = int(top_k) if top_k and top_k.isdigit() else None
-
     function_list = _build_lucy_function_list()
-    v2_function_registry = _build_function_registry(function_list)
-    toolset_signature = _toolset_signature(function_list)
-    prompt_hash = compute_prompt_hash()
+    fn_registry = _build_function_registry(function_list)
+    sig = _toolset_signature(function_list)
 
-    record = agent_registry.get_agent_record(registry_partition, "persistent")
-    published_state = None
-    latest_published_state = None
-    try:
-        published_state = get_published_deployment_state(
-            project_scope,
-            application_name,
-            credential,
-        )
-        latest_published_state = get_latest_published_deployment_state(
-            project_scope,
-            application_name,
-            credential,
-            agent_name=registry_partition,
-        )
-    except Exception as publish_error:
-        logger.warning("⚠️ Failed to read Foundry publication state: %s", publish_error)
-
-    if record and record.get("agent_name") and record.get("agent_version"):
-        mismatch_reasons = []
-        if record.get("search_index_name") != search_index_name:
-            mismatch_reasons.append("search_index_name")
-        if record.get("search_connection_id") != connection_id:
-            mismatch_reasons.append("search_connection_id")
-        if record.get("model_deployment") != model_deployment:
-            mismatch_reasons.append("model_deployment")
-        if record.get("query_type") != (query_type or ""):
-            mismatch_reasons.append("query_type")
-        if str(record.get("top_k") or "") != (str(top_k_value) if top_k_value is not None else ""):
-            mismatch_reasons.append("top_k")
-        if record.get("toolset_signature") != toolset_signature:
-            mismatch_reasons.append("toolset_signature")
-        if prompt_hash_changed(record, prompt_hash):
-            mismatch_reasons.append("prompt_hash")
-
-        if (
-            published_state
-            and str(record.get("agent_version") or "") != published_state.agent_version
-        ):
-            logger.warning(
-                "⚠️ Foundry registry drift detected: table=%s:%s published=%s:%s deployment=%s",
-                record.get("agent_name"),
-                record.get("agent_version"),
-                published_state.agent_name,
-                published_state.agent_version,
-                published_state.deployment_name,
-            )
-        if (
-            latest_published_state
-            and published_state
-            and latest_published_state.agent_version != published_state.agent_version
-        ):
-            logger.warning(
-                "⚠️ Foundry application routing is stale: active=%s latest=%s",
-                published_state.agent_version,
-                latest_published_state.agent_version,
-            )
-
-        effective_version = select_effective_agent_version(
-            record,
-            published_state,
-            mismatch_reasons,
-            latest_published_state,
-        )
-        if effective_version:
-            try:
-                publication_state = reconcile_managed_publication(
-                    project_scope,
-                    application_name,
-                    registry_partition,
-                    effective_version,
-                    credential,
-                )
-            except Exception as publish_error:
-                logger.warning(
-                    "⚠️ Foundry publication reconciliation failed; using project agent version directly: %s",
-                    publish_error,
-                )
-                publication_state = _fallback_publication_state(
-                    application_name,
-                    registry_partition,
-                    effective_version,
-                )
-            agent_name = registry_partition
-            agent_version = publication_state.agent_version
-            agent_registry.upsert_agent_record(
-                registry_partition,
-                "persistent",
-                {
-                    "agent_name": agent_name,
-                    "agent_version": agent_version,
-                    "application_name": publication_state.application_name,
-                    "deployment_name": publication_state.deployment_name,
-                    "deployment_id": publication_state.deployment_id,
-                    "search_index_name": search_index_name,
-                    "search_connection_id": connection_id,
-                    "model_deployment": model_deployment,
-                    "query_type": query_type or "",
-                    "top_k": top_k_value if top_k_value is not None else "",
-                    "toolset_signature": toolset_signature,
-                    "prompt_hash": prompt_hash,
-                },
-            )
-            logger.info(
-                "✅ Foundry v2 agent loaded from reconciled publication state: %s:%s (%s/%s)",
-                agent_name,
-                agent_version,
-                publication_state.application_name,
-                publication_state.deployment_name,
-            )
-            return True
-
-        logger.warning(
-            "Foundry v2 agent config mismatch (%s). Recreating agent.",
-            ", ".join(mismatch_reasons),
-        )
-
-    ai_search_tool_v2 = build_ai_search_tool(
-        connection_id=connection_id,
-        index_name=search_index_name,
-        query_type=query_type,
-        top_k=top_k_value,
-    )
-
-    function_tools = build_function_tools(function_list)
-    logger.info("✅ V2 toolset prepared (functions=%s)", len(v2_function_registry))
-
-    agent_definition = build_prompt_agent_definition(
-        model=model_deployment,
+    context = await initialize_foundry_v2_agent(
         instructions=get_agent_instructions(),
-        tools=[ai_search_tool_v2] + function_tools,
+        function_list=function_list,
+        function_registry=fn_registry,
+        toolset_signature=sig,
+        prompt_hash=compute_prompt_hash(),
+        existing_agent_registry=agent_registry,
     )
 
-    new_agent = project_client.agents.create_version(
-        agent_name=registry_partition,
-        definition=agent_definition,
-        description="Lucy Foundry v2 prompt agent",
-    )
+    project_client = context.project_client
+    openai_client = context.openai_client
+    agent_registry = context.agent_registry
+    agent_name = context.agent_name
+    agent_version = context.agent_version
+    v2_function_registry = context.function_registry
 
-    agent_name = new_agent.name
-    try:
-        publication_state = reconcile_managed_publication(
-            project_scope,
-            application_name,
-            registry_partition,
-            str(new_agent.version),
-            credential,
-        )
-    except Exception as publish_error:
-        logger.warning(
-            "⚠️ Foundry publication creation failed; continuing with project agent version directly: %s",
-            publish_error,
-        )
-        publication_state = _fallback_publication_state(
-            application_name,
-            registry_partition,
-            str(new_agent.version),
-        )
-    agent_version = publication_state.agent_version
-    agent_registry.upsert_agent_record(
-        registry_partition,
-        "persistent",
-        {
-            "agent_name": agent_name,
-            "agent_version": agent_version,
-            "application_name": publication_state.application_name,
-            "deployment_name": publication_state.deployment_name,
-            "deployment_id": publication_state.deployment_id,
-            "search_index_name": search_index_name,
-            "search_connection_id": connection_id,
-            "model_deployment": model_deployment,
-            "query_type": query_type or "",
-            "top_k": top_k_value if top_k_value is not None else "",
-            "toolset_signature": toolset_signature,
-            "prompt_hash": prompt_hash,
-        },
-    )
-    logger.info(
-        "✅ Created Foundry v2 agent %s:%s and reconciled application %s deployment %s",
-        agent_name,
-        agent_version,
-        publication_state.application_name,
-        publication_state.deployment_name,
-    )
     return True
 
 
 def _extract_v2_function_calls(response) -> List[Dict[str, Any]]:
-    calls: List[Dict[str, Any]] = []
-    output_items = getattr(response, "output", None) or []
-    for item in output_items:
-        item_type = getattr(item, "type", None)
-        if isinstance(item, dict):
-            item_type = item.get("type")
-        if item_type != "function_call":
-            continue
-        if isinstance(item, dict):
-            name = item.get("name")
-            arguments = item.get("arguments")
-            call_id = item.get("call_id")
-        else:
-            name = getattr(item, "name", None)
-            arguments = getattr(item, "arguments", None)
-            call_id = getattr(item, "call_id", None)
-        if not call_id or not name:
-            continue
-        calls.append(
-            {
-                "name": name,
-                "arguments": arguments or "{}",
-                "call_id": call_id,
-            }
-        )
-    return calls
+    return _lucy_extract_v2_function_calls(response)
 
 
 def _execute_v2_tool_call(name: str, arguments: str) -> str:
-    func = v2_function_registry.get(name)
-    if func is None:
-        logger.warning("⚠️ V2 tool call requested unknown function: %s", name)
-        return json.dumps({"error": f"Unknown tool: {name}"})
-
-    try:
-        payload = json.loads(arguments) if arguments else {}
-    except Exception:
-        payload = {}
-
-    if not isinstance(payload, dict):
-        payload = {}
-
-    try:
-        sig = inspect.signature(func)
-        allowed = {k: v for k, v in payload.items() if k in sig.parameters}
-    except Exception:
-        allowed = payload
-
-    try:
-        result = func(**allowed)
-        if asyncio.iscoroutine(result):
-            # Ensure coroutines are executed in sync context
-            result = asyncio.run(result)
-    except Exception as exc:
-        logger.error("❌ Tool execution failed for %s: %s", name, exc, exc_info=True)
-        return json.dumps({"error": str(exc)})
-
-    if isinstance(result, str):
-        return result
-    try:
-        return json.dumps(result)
-    except Exception:
-        return json.dumps({"result": str(result)})
+    return _lucy_execute_v2_tool_call(name, arguments, v2_function_registry)
 
 
 async def _run_response_v2(user_text: str) -> Dict[str, Any]:
-    """Execute a Responses API call for the v2 agent and return assistant text + tool outputs."""
+    """Thin adapter — initializes Foundry v2 globals, builds a LucySession from
+    cl.user_session, delegates the Responses loop to lucy_core.responses_loop,
+    and writes session state back to cl.user_session.
+    """
     global agent_name, agent_version, openai_client
 
     await _initialize_persistent_agent_v2()
     if not openai_client or not agent_name or not agent_version:
         raise RuntimeError("Foundry v2 client not initialized")
 
-    eval_turn_id = str(uuid.uuid4())
-    eval_step_index = 0
-
-    def _normalize_metadata_values(metadata: Dict[str, Any]) -> Dict[str, str]:
-        """Coerce metadata values to strings and truncate to 512 chars per API spec."""
-        normalized: Dict[str, str] = {}
-        for key, value in metadata.items():
-            if value is None:
-                continue
-            if not isinstance(value, str):
-                value = str(value)
-            if len(value) > 512:
-                value = value[:512]
-            normalized[key] = value
-        return normalized
-
-    def _apply_eval_metadata(
-        payload: Dict[str, Any],
-        *,
-        step: str,
-        step_index: int,
-        previous_id: Optional[str] = None,
-    ) -> None:
-        metadata = dict(payload.get("metadata") or {})
-        metadata["lucy_eval_turn_id"] = eval_turn_id
-        metadata["lucy_eval_step"] = step
-        metadata["lucy_eval_step_index"] = str(step_index)
-        if previous_id:
-            metadata["lucy_eval_previous_response_id"] = previous_id
-        payload["metadata"] = _normalize_metadata_values(metadata)
-
-    conversation_id = cl.user_session.get("conversation_id")
-    previous_response_id = cl.user_session.get("previous_response_id")
-    state_items = _build_authenticated_state_items()
-    if conversation_id:
-        payload = build_response_payload(
-            conversation_id=conversation_id,
-            user_input=user_text,
-            agent_name=agent_name,
-            agent_version=agent_version,
-        )
-        if state_items:
-            payload["input"] = state_items + [
-                {
-                    "type": "message",
-                    "role": "user",
-                    "content": user_text,
-                }
-            ]
-    else:
-        payload = {
-            "input": user_text,
-            "extra_body": build_agent_reference(agent_name, agent_version),
-        }
-        if previous_response_id:
-            payload["previous_response_id"] = previous_response_id
-        if state_items:
-            payload["input"] = state_items + [
-                {
-                    "type": "message",
-                    "role": "user",
-                    "content": user_text,
-                }
-            ]
-
-    _apply_eval_metadata(
-        payload,
-        step="initial",
-        step_index=eval_step_index,
-        previous_id=previous_response_id,
+    session = _LucySession(
+        session_id="chainlit",
+        conversation_id=cl.user_session.get("conversation_id"),
+        previous_response_id=cl.user_session.get("previous_response_id"),
+        last_eval_final_response_id=cl.user_session.get("last_eval_final_response_id"),
+        authenticated=bool(cl.user_session.get("authenticated")),
+        apex_id=cl.user_session.get("apex_id"),
+        user_name=cl.user_session.get("user_name"),
     )
 
-    max_output_tokens = should_include_max_output_tokens(
-        os.getenv("AZURE_RESPONSES_MAX_OUTPUT_TOKENS")
-    )
-    if max_output_tokens is not None:
-        payload["max_output_tokens"] = max_output_tokens
-
-    extra_body = payload.get("extra_body")
-    uses_agent_reference = isinstance(extra_body, dict) and "agent" in extra_body
-
-    reasoning_effort = os.getenv("AZURE_RESPONSES_REASONING_EFFORT")
-    if reasoning_effort and not uses_agent_reference:
-        payload["reasoning"] = {"effort": reasoning_effort}
-
-    store = os.getenv("AZURE_RESPONSES_STORE")
-    if store:
-        payload["store"] = store.strip().lower() in {"1", "true", "yes", "on"}
-
-    logger.info(
-        "🧵 V2 context: conversation_id=%s previous_response_id=%s state_items=%s",
-        conversation_id,
-        previous_response_id,
-        len(state_items),
-    )
-    response = openai_client.responses.create(**payload)
-    tool_outputs: List[Dict[str, Any]] = []
-
-    response_id = getattr(response, "id", None)
-    if response_id:
-        cl.user_session.set("previous_response_id", response_id)
-
-    if not conversation_id:
-        conv = getattr(response, "conversation", None)
-        if isinstance(conv, dict):
-            conversation_id = conv.get("id")
-        else:
-            conversation_id = getattr(conv, "id", None)
-        if not conversation_id:
-            conversation_id = getattr(response, "conversation_id", None)
-        if conversation_id:
-            cl.user_session.set("conversation_id", conversation_id)
-
-    max_tool_loops = int(os.getenv("AZURE_RESPONSES_MAX_TOOL_LOOPS", "6"))
-    loop_count = 0
-    while True:
-        tool_calls = _extract_v2_function_calls(response)
-        if not tool_calls:
-            break
-        loop_count += 1
-        if loop_count > max_tool_loops:
-            logger.warning("⚠️ Tool loop exceeded max iterations (%s). Stopping.", max_tool_loops)
-            break
-
-        output_items: List[Dict[str, Any]] = []
-        for call in tool_calls:
-            name = call["name"]
-            arguments = call.get("arguments") or "{}"
-            call_id = call["call_id"]
-            output = _execute_v2_tool_call(name, arguments)
-            tool_outputs.append(
-                {
-                    "name": name,
-                    "arguments": arguments,
-                    "output": output,
-                    "call_id": call_id,
-                }
-            )
-            output_items.append(
-                {
-                    "type": "function_call_output",
-                    "call_id": call_id,
-                    "output": output,
-                }
-            )
-
-        follow_payload = {
-            "input": output_items,
-            "previous_response_id": response.id,
-            "extra_body": build_agent_reference(agent_name, agent_version),
-        }
-        if conversation_id:
-            follow_payload["conversation"] = conversation_id
-
-        eval_step_index += 1
-        _apply_eval_metadata(
-            follow_payload,
-            step="tool_output",
-            step_index=eval_step_index,
-            previous_id=response.id,
-        )
-
-        response = openai_client.responses.create(**follow_payload)
-        response_id = getattr(response, "id", None)
-        if response_id:
-            cl.user_session.set("previous_response_id", response_id)
-
-    assistant_text = extract_response_text(response).strip()
-    if not assistant_text:
-        output_items = getattr(response, "output", None)
-        summary = []
-        for item in output_items or []:
-            item_type = getattr(item, "type", None)
-            if isinstance(item, dict):
-                item_type = item.get("type")
-                contents = item.get("content", [])
-            else:
-                contents = getattr(item, "content", None)
-            content_types = []
-            for content in contents or []:
-                if isinstance(content, dict):
-                    content_types.append(content.get("type"))
-                else:
-                    content_types.append(getattr(content, "type", None))
-            summary.append({"type": item_type, "content_types": content_types})
-        logger.warning(
-            "Responses returned empty text. output_summary=%s output_text_type=%s",
-            summary,
-            type(getattr(response, "output_text", None)).__name__,
-        )
-
-    final_response_id = getattr(response, "id", None)
-    if final_response_id:
-        cl.user_session.set("last_eval_final_response_id", final_response_id)
-    logger.info(
-        "📊 Eval response: turn_id=%s final_response_id=%s step_index=%s",
-        eval_turn_id,
-        final_response_id,
-        eval_step_index,
+    result = await _lucy_run_response_v2(
+        user_text=user_text,
+        session=session,
+        openai_client=openai_client,
+        agent_name=agent_name,
+        agent_version=agent_version,
+        function_registry=v2_function_registry,
     )
 
-    return {"text": assistant_text, "tool_outputs": tool_outputs}
+    if session.conversation_id is not None:
+        cl.user_session.set("conversation_id", session.conversation_id)
+    if session.previous_response_id is not None:
+        cl.user_session.set("previous_response_id", session.previous_response_id)
+    if session.last_eval_final_response_id is not None:
+        cl.user_session.set("last_eval_final_response_id", session.last_eval_final_response_id)
+
+    return result
 
 @azure_retry
 @trace_function(name="agent.initialization")
@@ -5458,7 +4928,7 @@ async def main(message: cl.Message):
                 with trace_span("agent.run", **{
                     LucyAttributes.AGENT_ID: agent_id or f"{agent_name}:{agent_version}",
                     "thread.id": conversation_id or "",
-                    LucyAttributes.MODEL_NAME: _get_model_deployment_name(),
+                    LucyAttributes.MODEL_NAME: get_model_deployment_name(),
                     "run.start_time": datetime.now(timezone.utc).isoformat(),
                 }):
                     v2_result = await _run_response_v2(message.content)
