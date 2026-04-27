@@ -17,6 +17,8 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from .artifacts import extract_artifacts_from_tool_outputs
+from .handoff import extract_handoff_from_tool_outputs, handoff_artifact_from_payload
 from .responses_loop import run_response_v2
 from .session import LucyRequest, LucyResponse
 
@@ -58,8 +60,23 @@ class LucyRuntime:
             agent_version=self.agent_version,
             function_registry=self.function_registry,
         )
+        artifacts = extract_artifacts_from_tool_outputs(
+            result.get("tool_outputs", []),
+            assistant_text=result.get("text"),
+        )
+        handoff = extract_handoff_from_tool_outputs(
+            result.get("tool_outputs", []),
+            assistant_text=result.get("text"),
+            reason=request.metadata.get("handoff_reason"),
+        )
+        if handoff is not None:
+            handoff_artifact = handoff_artifact_from_payload(handoff)
+            if handoff_artifact is not None:
+                artifacts.append(handoff_artifact)
         return LucyResponse(
             text=result["text"],
             session=request.session,
             tool_calls=result.get("tool_outputs", []),
+            artifacts=artifacts,
+            handoff=handoff,
         )

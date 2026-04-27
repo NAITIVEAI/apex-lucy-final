@@ -136,13 +136,179 @@ A handful of Lucy's tools call `cl.user_session.set/get` or `cl.Message` for UI 
 - Phase 0 production safety prereqs from plan 001 (portal API auth, `AZURE_TRACING_GEN_AI_CONTENT_RECORDING_ENABLED` default, ACA health probes, storage hardening) — independent of runtime extraction. Track as plan 004 candidate.
 - Phase 7 (Chainlit local-runtime vs Hosted-Agent-endpoint decision) is moot under the AI Gateway path; Chainlit always calls `LucyRuntime` in-process.
 
+**Plan 001 Phase 2 — Artifact / handoff abstractions — DONE 2026-04-26.**
+
+`agent/app/lucy_core/artifacts.py` and `agent/app/lucy_core/handoff.py` now own the portable non-text normalization layer that plan 001 called for.
+
+Files changed:
+- `agent/app/lucy_core/artifacts.py` (new)
+- `agent/app/lucy_core/handoff.py` (new)
+- `agent/app/lucy_core/runtime.py` (modified — populates `LucyResponse.artifacts` and `LucyResponse.handoff`)
+- `agent/tests/test_lucy_artifacts.py` (new)
+- `agent/tests/test_lucy_handoff.py` (new)
+- `agent/tests/test_lucy_runtime.py` (modified — added PDF and handoff runtime coverage)
+
+Behavior verified:
+- PDF/blob/link text is normalized into `LucyArtifact` objects.
+- Successful handoff tool output is normalized into a portable handoff dict plus a `handoff` artifact.
+- Existing session/tool-registry/response-loop tests still pass.
+
+Tests run:
+- `pytest -q agent/tests/test_lucy_artifacts.py agent/tests/test_lucy_handoff.py agent/tests/test_lucy_runtime.py agent/tests/test_lucy_session.py`
+- `pytest -q agent/tests/test_lucy_artifacts.py agent/tests/test_lucy_handoff.py agent/tests/test_lucy_runtime.py agent/tests/test_lucy_session.py agent/tests/test_lucy_tool_registry.py agent/tests/test_lucy_responses_loop.py`
+- `pytest -q agent/tests/test_http_app.py` (skipped in local env due to FastAPI/pydantic mismatch)
+
+Results:
+- 18 passed in the focused artifact/handoff run.
+- 56 passed in the broader Lucy-core run.
+- 1 skipped in the HTTP app run (expected local-env skip guard).
+
+Follow-up:
+- Plan 002 now has the prerequisite artifact/handoff abstraction layer it needed; remaining work there is portal / registration / docs validation rather than core runtime plumbing.
+
 ---
 
-### `002-foundry-ai-gateway-custom-agent-registration.md` — PENDING
+### `002-foundry-ai-gateway-custom-agent-registration.md` — IMPLEMENTED / LIVE SMOKE PASSED 2026-04-27
 
-**Status:** pending; depends on plan 001 Phase 1 completion.
-**Goal:** Register Lucy's ACA service as a Custom Agent via the Azure AI Gateway already deployed in the Foundry project, enabling Foundry Monitor dashboard and continuous evaluation rules against the real Lucy runtime.
-**Prerequisites:** plan 001 Phase 1 (runtime extraction) and Phase 2 (artifact + handoff abstractions).
+**Status:** implemented for Lucy's gateway-facing ACA runtime; Foundry portal/APIM
+registration remains the operator-side click/config step.
+
+**Summary:**
+- Added production gateway wiring for Lucy's custom ACA runtime without moving Lucy
+  out of her existing codebase.
+- Created and deployed dedicated gateway ACA `agent-lucy-gateway-eus2` so the
+  member-facing Chainlit ACA `agent-lucy-eus2` can keep ingress on port `8000`
+  while Foundry/APIM hits the HTTP wrapper on port `8002`.
+- Deployed image
+  `agentlucyacreus2.azurecr.io/agent-lucy-eus2:codex-gateway-20260427073432`
+  (`sha256:61054680e76bcf827935a3443d753d9ec33263284c1b9b4aea23310f94b9624f`)
+  to revision `agent-lucy-gateway-eus2--0000008`.
+- Gateway runtime recreated the Foundry project prompt-agent version due to
+  `reasoning_effort` drift and now uses `agent-lucy-prod:5`.
+- `/health/gateway` returns healthy with `project_probe.method=list_versions`.
+- Authenticated `POST /agent/respond` with `X-Agent-Token` returned HTTP 200 and
+  produced a Lucy response plus a `get_current_datetime` tool call.
+
+**Files changed:**
+- `agent/app/requirements.txt` — upgraded Azure AI Projects dependency to the
+  current 2.x line and added tracing/evaluation dependencies.
+- `agent/app/Dockerfile` — added OTel defaults and `LUCY_CHAINLIT_ENABLED`.
+- `agent/app/start_services.sh` — supports dedicated HTTP-wrapper foreground
+  mode with `LUCY_CHAINLIT_ENABLED=false`.
+- `agent/app/.env.example` — documents project endpoint, gateway token,
+  Chainlit toggle, and OTel env vars.
+- `agent/app/tracing_config.py` — reads `OTEL_SERVICE_NAME` and
+  `OTEL_RESOURCE_ATTRIBUTES`.
+- `agent/app/lucy_core/http_app.py` — attaches project client diagnostics,
+  exposes `/health/gateway`, and reports gateway readiness fields.
+- `agent/app/lucy_core/responses_loop.py` — wraps response/tool execution in
+  GenAI/Foundry OTel spans, records eval-safe metadata, handles async tools in
+  the live loop, uses `agent_reference`, and suppresses request-level reasoning
+  when invoking stored agent versions.
+- `agent/app/foundry_v2.py` — uses current `agent_reference`, supports the
+  Azure AI Projects 2.1 `AzureAISearchTool` rename, and persists explicit
+  prompt-agent reasoning config.
+- `agent/app/foundry_v2_runtime.py` — uses current `agent_reference` payload
+  shape.
+- `agent/app/foundry_init.py` — derives prompt-agent `reasoning_effort`,
+  coerces GPT-5.2 to `medium`, and treats reasoning drift as a version mismatch.
+- `agent/evals/cases.jsonl` — seed eval cases for scope, notice auth, handoff,
+  and sensitive-data behavior.
+- `docs/architecture/foundry-ai-gateway-registration.md` — live runbook with
+  resource names, smoke checks, eval setup, and RBAC caveat.
+
+**Research evidence used:**
+- Microsoft Learn current `PromptAgentDefinition` docs show a `reasoning`
+  property on prompt-agent definitions.
+- Microsoft Learn current runtime/components and REST reference confirm
+  Responses + `agent_reference` as the project-agent invocation path.
+- Live Azure SDK inspection in deployed ACA confirmed `azure-ai-projects 2.1.0`
+  exposes `AzureAISearchTool` instead of the previous `AzureAISearchAgentTool`
+  name, while `Reasoning(effort=...)` supports `medium`.
+
+**Tests run:**
+- `python -m pytest -q tests/test_foundry_init.py tests/test_lucy_responses_loop.py tests/test_agent_reference_payload.py tests/test_foundry_v2_runtime.py tests/test_http_app.py`
+- `python -m pytest -q tests`
+- `bash -n app/start_services.sh`
+- JSONL parse check for `agent/evals/cases.jsonl`
+- `az acr build --registry agentlucyacreus2 --image agent-lucy-eus2:codex-gateway-20260427073432 agent/app`
+- `GET https://agent-lucy-gateway-eus2.purpleocean-f3514433.eastus2.azurecontainerapps.io/health/gateway`
+- Authenticated `POST https://agent-lucy-gateway-eus2.purpleocean-f3514433.eastus2.azurecontainerapps.io/agent/respond`
+
+**Results:**
+- Focused tests: `62 passed, 1 skipped`.
+- Full agent tests: `112 passed, 1 skipped`.
+- Shell syntax and eval JSONL validation passed.
+- ACR build succeeded with digest
+  `sha256:61054680e76bcf827935a3443d753d9ec33263284c1b9b4aea23310f94b9624f`.
+- Gateway health smoke returned healthy.
+- Gateway respond smoke returned HTTP 200.
+
+**Blockers / caveats:**
+- Managed application publication still returns ARM `AuthorizationFailed` for
+  `Microsoft.CognitiveServices/accounts/projects/applications/agentdeployments/write`
+  under the gateway ACA managed identity. The project agent version path works
+  and is the runtime path currently in use; widen RBAC before relying on managed
+  application deployment reconciliation.
+
+**Follow-ups:**
+- Register the custom agent in the Foundry portal against
+  `https://agent-lucy-gateway-eus2.purpleocean-f3514433.eastus2.azurecontainerapps.io/agent/respond`
+  with OpenTelemetry agent ID `lucy-aca`.
+- Configure the AI Gateway/APIM outbound policy to send
+  `X-Agent-Token: <LUCY_GATEWAY_API_TOKEN>`.
+- Confirm Foundry Monitor shows spans with `gen_ai.agents.id="lucy-aca"` and
+  `gen_ai.tool.name`.
+- Build Foundry continuous eval rules from `agent/evals/cases.jsonl`.
+
+**Live hotfix 2026-04-27 — context preservation after auth/reconnect:**
+- User logs showed Chainlit fired `on_chat_start` again after a pause/reconnect,
+  and the handler reset `previous_response_id` to `None`; the following auth
+  turn had `previous_response_id=None` and `state_items=0`, so Lucy lost the
+  prior "explain my notice" starter intent.
+- Changed `agent/app/apex.py` so v2 chat startup preserves existing
+  `session_id`, `conversation_id`, and `previous_response_id` instead of
+  clearing them on reconnect.
+- Changed `agent/app/apex.py` to store `pending_notice_request_text` and pass
+  pending notice metadata into `LucySession`.
+- Changed `agent/app/lucy_core/responses_loop.py` so pending notice intent is
+  prepended as a system state item before authentication completes; after auth,
+  Lucy is instructed to continue the original notice request instead of asking
+  generically how she can help.
+- Changed fallback clearing so a pending notice request is only cleared after
+  forced notice retrieval succeeds; transient failures leave the request pending
+  for the next turn.
+- Tests run: `python -m pytest -q agent/tests/test_foundry_init.py
+  agent/tests/test_lucy_responses_loop.py agent/tests/test_lucy_runtime.py`
+  (`62 passed in 0.14s`).
+- Deployed image
+  `agentlucyacreus2.azurecr.io/agent-lucy-eus2:codex-context-preserve-20260427034920`
+  (`sha256:718d2e537169263ea10e96e81b61c87ccb7f4daf53e84f8e1dea04e1e64494bd`)
+  to `agent-lucy-eus2--0000065` and `agent-lucy-gateway-eus2--0000013`.
+- Verification: `/health/gateway` returned HTTP 200 healthy; AI Gateway/APIM
+  POST returned HTTP 200 with a Lucy response.
+
+**Pending uncovered facts / bugs after live testing:**
+- Foundry portal can display a prompt-agent version with `reasoning.effort=low`,
+  but the deployed `gpt-5.2-chat-2025-12-11` Responses invocation rejected
+  request-time low reasoning with `unsupported_value` and only accepted
+  `medium`. Keep production env at `medium` until the exact portal/runtime
+  mismatch is reproduced in an isolated test.
+- `find_notice_for_user_sync` still attempts Chainlit progress UI updates from
+  a tool execution path. Earlier production logs showed `Chainlit context not
+  found` from those progress updates. It appears non-fatal, but the progress
+  side effect should be made Chainlit-context-aware before relying on it.
+- Foundry traces are flowing through AI Gateway/APIM, but token columns were
+  observed as `0` in the portal during smoke tests. Confirm whether Foundry
+  custom-agent gateway traces can infer tokens from proxied Responses calls or
+  whether Lucy must emit explicit GenAI token attributes.
+- The Foundry eval table showed intermittent `tool_output_utilization` failures
+  and `Ungrounded attributes` columns during early testing. Treat these as eval
+  rubric follow-ups, not runtime blockers, and inspect the underlying failed
+  rows before tuning prompts/tools.
+- Chainlit reconnect behavior is expected, but any future startup work must
+  remain idempotent and preserve `conversation_id`, `previous_response_id`, and
+  pending task metadata.
 
 ---
 

@@ -58,6 +58,35 @@ def get_model_deployment_name() -> str:
     )
 
 
+def get_agent_reasoning_effort(model_deployment: Optional[str] = None) -> str:
+    """Reasoning effort persisted into the Foundry prompt-agent version.
+
+    The project Responses request references a stored agent version, so the
+    latency/cost knob has to be captured on the agent definition itself. GPT-5.2
+    currently rejects non-medium reasoning at invocation time even when agent
+    creation accepts the definition, so keep that deployment on medium.
+    """
+    model = (model_deployment or get_model_deployment_name() or "").strip().lower()
+    explicit = (
+        os.getenv("AZURE_AGENT_REASONING_EFFORT")
+        or os.getenv("AZURE_RESPONSES_REASONING_EFFORT")
+        or ""
+    ).strip().lower()
+
+    if model.startswith("gpt-5.2"):
+        if explicit and explicit != "medium":
+            logger.warning(
+                "Ignoring unsupported reasoning effort %s for %s; using medium",
+                explicit,
+                model,
+            )
+        return "medium"
+
+    if not explicit and model.startswith("gpt-5"):
+        return "medium"
+    return explicit
+
+
 def get_agent_name() -> str:
     return os.getenv("FOUNDRY_AGENT_NAME") or "lucy"
 
@@ -187,6 +216,7 @@ async def initialize_foundry_v2_agent(
     registry_partition = get_agent_name()
     application_name = get_application_name_for_agent()
     model_deployment = get_model_deployment_name()
+    reasoning_effort = get_agent_reasoning_effort(model_deployment)
     search_index_name = get_search_index_name()
     if not search_index_name:
         raise ValueError("AI_SEARCH_INDEX_NAME (or AZURE_SEARCH_INDEX_NAME) is required")
@@ -227,6 +257,8 @@ async def initialize_foundry_v2_agent(
             mismatch_reasons.append("search_connection_id")
         if record.get("model_deployment") != model_deployment:
             mismatch_reasons.append("model_deployment")
+        if str(record.get("reasoning_effort") or "") != reasoning_effort:
+            mismatch_reasons.append("reasoning_effort")
         if record.get("query_type") != (query_type or ""):
             mismatch_reasons.append("query_type")
         if str(record.get("top_k") or "") != (str(top_k_value) if top_k_value is not None else ""):
@@ -298,6 +330,7 @@ async def initialize_foundry_v2_agent(
                     "search_index_name": search_index_name,
                     "search_connection_id": connection_id,
                     "model_deployment": model_deployment,
+                    "reasoning_effort": reasoning_effort,
                     "query_type": query_type or "",
                     "top_k": top_k_value if top_k_value is not None else "",
                     "toolset_signature": toolset_signature,
@@ -338,13 +371,43 @@ async def initialize_foundry_v2_agent(
         model=model_deployment,
         instructions=instructions,
         tools=[ai_search_tool_v2] + function_tools,
+        reasoning_effort=reasoning_effort,
     )
 
-    new_agent = project_client.agents.create_version(
-        agent_name=registry_partition,
-        definition=agent_definition,
-        description="Lucy Foundry v2 prompt agent",
-    )
+    try:
+        new_agent = project_client.agents.create_version(
+            agent_name=registry_partition,
+            definition=agent_definition,
+            description="Lucy Foundry v2 prompt agent",
+        )
+    except Exception as create_error:
+        error_text = str(create_error).lower()
+        should_retry_medium = (
+            bool(reasoning_effort)
+            and reasoning_effort != "medium"
+            and ("reasoning" in error_text or "effort" in error_text)
+        )
+        if not should_retry_medium:
+            raise
+
+        logger.warning(
+            "Foundry rejected reasoning effort %s for %s; retrying agent "
+            "version creation with medium.",
+            reasoning_effort,
+            model_deployment,
+        )
+        reasoning_effort = "medium"
+        agent_definition = build_prompt_agent_definition(
+            model=model_deployment,
+            instructions=instructions,
+            tools=[ai_search_tool_v2] + function_tools,
+            reasoning_effort=reasoning_effort,
+        )
+        new_agent = project_client.agents.create_version(
+            agent_name=registry_partition,
+            definition=agent_definition,
+            description="Lucy Foundry v2 prompt agent",
+        )
 
     agent_name_value = new_agent.name
     try:
@@ -378,6 +441,7 @@ async def initialize_foundry_v2_agent(
             "search_index_name": search_index_name,
             "search_connection_id": connection_id,
             "model_deployment": model_deployment,
+            "reasoning_effort": reasoning_effort,
             "query_type": query_type or "",
             "top_k": top_k_value if top_k_value is not None else "",
             "toolset_signature": toolset_signature,

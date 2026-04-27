@@ -12,7 +12,7 @@ class AgentReferenceTests(unittest.TestCase):
         payload = build_agent_reference("lucy", "1")
         self.assertEqual(
             payload,
-            {"agent": {"type": "agent_reference", "name": "lucy", "version": "1"}},
+            {"agent_reference": {"type": "agent_reference", "name": "lucy", "version": "1"}},
         )
 
 

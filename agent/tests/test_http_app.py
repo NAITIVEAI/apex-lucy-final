@@ -156,6 +156,15 @@ class _MockRuntime:
         return LucyResponse(text=self._response_text, session=request.session)
 
 
+class _MockProjectClient:
+    class _Agents:
+        def list_agents(self, limit=1):
+            return iter([{"name": "lucy"}])
+
+    def __init__(self):
+        self.agents = self._Agents()
+
+
 class RouteTests(unittest.TestCase):
     def _client(self, runtime=None) -> TestClient:
         runtime = runtime or _MockRuntime()
@@ -175,6 +184,38 @@ class RouteTests(unittest.TestCase):
         body = resp.json()
         self.assertTrue(body["ready"])
         self.assertEqual(body["otel_agent_id"], "lucy-aca")
+        self.assertFalse(body["gateway_token_configured"])
+        self.assertEqual(body["agent_url_path"], "/agent/respond")
+
+    def test_gateway_health_reports_unhealthy_when_token_missing(self):
+        runtime = _MockRuntime()
+        runtime.project_client = _MockProjectClient()
+        with patch.dict(os.environ, {"AZURE_AI_PROJECT_ENDPOINT": "https://example"}):
+            os.environ.pop("LUCY_GATEWAY_API_TOKEN", None)
+            with self._client(runtime=runtime) as client:
+                resp = client.get("/health/gateway")
+        self.assertEqual(resp.status_code, 200)
+        body = resp.json()
+        self.assertEqual(body["status"], "unhealthy")
+        self.assertFalse(body["gateway_connected"])
+        self.assertTrue(body["runtime_initialized"])
+        self.assertFalse(body["gateway_token_configured"])
+        self.assertTrue(body["project_probe"]["ok"])
+
+    def test_gateway_health_reports_connected(self):
+        runtime = _MockRuntime()
+        runtime.project_client = _MockProjectClient()
+        with patch.dict(os.environ, {
+            "LUCY_GATEWAY_API_TOKEN": "secret",
+            "AZURE_AI_PROJECT_ENDPOINT": "https://example",
+        }):
+            with self._client(runtime=runtime) as client:
+                resp = client.get("/health/gateway")
+        self.assertEqual(resp.status_code, 200)
+        body = resp.json()
+        self.assertEqual(body["status"], "healthy")
+        self.assertTrue(body["gateway_connected"])
+        self.assertEqual(body["project_probe"]["method"], "list_agents")
 
     def test_respond_requires_token(self):
         with patch.dict(os.environ, {"LUCY_GATEWAY_API_TOKEN": "secret"}):

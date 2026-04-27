@@ -42,6 +42,15 @@ class _MockOpenAIClient:
         self.responses = _Responses()
 
 
+def _function_call_item(name, arguments, call_id):
+    return {
+        "type": "function_call",
+        "name": name,
+        "arguments": arguments,
+        "call_id": call_id,
+    }
+
+
 def _clean_env():
     return patch.dict(
         os.environ,
@@ -116,6 +125,94 @@ class LucyRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.tool_calls[0]["name"], "my_tool")
         self.assertEqual(response.tool_calls[0]["call_id"], "c1")
         self.assertEqual(executed, {"x": 1})
+
+    async def test_respond_extracts_pdf_artifact(self):
+        def find_notice_for_user_sync(apex_id):
+            return (
+                "**PDF_DISPLAY_INFO:**\n"
+                "- PDF_URL: https://example.com/lucycmnotices/notice.pdf?sig=abc\n"
+                "- PDF_NAME: Notice Packet\n"
+                "- DISPLAY_MODE: side"
+            )
+
+        client = _MockOpenAIClient([
+            _MockResponse(
+                response_id="r-1",
+                output=[
+                    _function_call_item(
+                        "find_notice_for_user_sync",
+                        '{"apex_id": "A123"}',
+                        "call-pdf",
+                    )
+                ],
+            ),
+            _MockResponse(response_id="r-2", output_text="Here is the notice."),
+        ])
+        runtime = LucyRuntime(
+            openai_client=client,
+            agent_name="lucy",
+            agent_version="4",
+            function_registry={"find_notice_for_user_sync": find_notice_for_user_sync},
+        )
+        request = LucyRequest(
+            input_text="show me my notice",
+            session=LucySession(session_id="s-1"),
+        )
+        with _clean_env():
+            response = await runtime.respond(request)
+        self.assertEqual(response.text, "Here is the notice.")
+        self.assertEqual(len(response.artifacts), 1)
+        self.assertEqual(response.artifacts[0].type, "pdf")
+        self.assertEqual(response.artifacts[0].label, "Notice Packet")
+        self.assertIn("sig=abc", response.artifacts[0].url)
+        self.assertIsNone(response.handoff)
+
+    async def test_respond_extracts_handoff_payload_and_artifact(self):
+        def send_handoff_notification_email_sync(apex_id, reason=None):
+            return (
+                '{"success": true, "message": "Human handoff created", '
+                '"agent_name": "Agent A", "handoff_id": "conv-9", '
+                '"conversation_id": "conv-9", '
+                '"portal_url": "https://portal.example/agent/conversation/conv-9", '
+                '"user_portal_url": "https://portal.example/chat/conv-9", '
+                '"apex_id": "A123", "establish_bridge": false, "wait_for_agent_join": false}'
+            )
+
+        client = _MockOpenAIClient([
+            _MockResponse(
+                response_id="r-1",
+                output=[
+                    _function_call_item(
+                        "send_handoff_notification_email_sync",
+                        '{"apex_id": "A123", "reason": "Need help"}',
+                        "call-handoff",
+                    )
+                ],
+            ),
+            _MockResponse(response_id="r-2", output_text="Human handoff created."),
+        ])
+        runtime = LucyRuntime(
+            openai_client=client,
+            agent_name="lucy",
+            agent_version="4",
+            function_registry={
+                "send_handoff_notification_email_sync": send_handoff_notification_email_sync
+            },
+        )
+        request = LucyRequest(
+            input_text="I need a human",
+            session=LucySession(session_id="s-1"),
+            metadata={"handoff_reason": "Need help"},
+        )
+        with _clean_env():
+            response = await runtime.respond(request)
+        self.assertIsNotNone(response.handoff)
+        self.assertEqual(response.handoff["created"], True)
+        self.assertEqual(response.handoff["conversation_id"], "conv-9")
+        self.assertEqual(response.handoff["status"], "pending")
+        self.assertEqual(response.handoff["reason"], "Need help")
+        self.assertEqual(response.artifacts[-1].type, "handoff")
+        self.assertEqual(response.artifacts[-1].url, "https://portal.example/agent/conversation/conv-9")
 
     async def test_respond_mutates_session_in_place(self):
         client = _MockOpenAIClient([
