@@ -4216,6 +4216,14 @@ async def check_for_agent_presence(thread_id: str) -> bool:
 # Add custom dashboard routes to Chainlit app
 def setup_dashboard_routes():
     """Add dashboard routes to the main Chainlit FastAPI app"""
+    dashboard_enabled = os.getenv(
+        "LUCY_DASHBOARD_ROUTES_ENABLED",
+        os.getenv("LUCY_CHAINLIT_ENABLED", "true"),
+    ).lower() not in {"0", "false", "no", "off"}
+    if not dashboard_enabled:
+        logger.info("ℹ️ Dashboard routes disabled for this process")
+        return
+
     try:
         from fastapi import Request
         from fastapi.responses import HTMLResponse, JSONResponse

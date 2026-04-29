@@ -1,9 +1,11 @@
-# Foundry AI Gateway Registration Runbook
+# Foundry AI Gateway Interim Registration Runbook
 
-This runbook wires Lucy's custom Python runtime in Azure Container Apps (ACA)
-to Microsoft Foundry via the Azure AI Gateway. The goal is production Monitor
-visibility, continuous evaluations, and gateway-level governance without moving
-Lucy out of her custom code runtime.
+This runbook documents the interim path that wires Lucy's custom Python runtime
+in Azure Container Apps (ACA) to Microsoft Foundry via the Azure AI Gateway. It
+was useful for early traces, eval smoke tests, and gateway-level governance, but
+it is not the golden path. The target Foundry v2 production architecture is a
+Hosted Agent container that exposes the Responses protocol while reusing the
+UI-independent `LucyRuntime` core.
 
 ## Current Production Resources
 
@@ -21,17 +23,20 @@ Lucy out of her custom code runtime.
 - Current gateway image digest: `sha256:718d2e537169263ea10e96e81b61c87ccb7f4daf53e84f8e1dea04e1e64494bd`
 - Current Foundry project agent version used by gateway/runtime: `agent-lucy-prod:7`
 
-## Why Gateway-Only ACA Is Preferred
+## Why The Gateway ACA Exists
 
 ACA exposes one public HTTPS ingress target port per container app. The existing
 Lucy app serves Chainlit on port `8000`; the gateway HTTP wrapper serves
 `POST /agent/respond` on `LUCY_HTTP_PORT` (`8002` by default). To avoid breaking
-the member-facing Chainlit route, create or update a dedicated gateway-facing
-ACA using the same image, with `LUCY_CHAINLIT_ENABLED=false` and ingress target
-port `8002`.
+the member-facing Chainlit route, the interim gateway path uses a dedicated
+gateway-facing ACA with `LUCY_CHAINLIT_ENABLED=false` and ingress target port
+`8002`.
 
-The existing all-in-one startup remains valid for internal smoke tests, but the
-Foundry registration URL must point at an externally reachable HTTP wrapper.
+This is a bridge, not the intended final topology. Hosted Agent uses a different
+serving surface: a container that speaks the Foundry protocol library on port
+`8088`, with Foundry owning the hosted agent endpoint, lifecycle, telemetry
+injection, and versioning. Chainlit should remain the member UI unless and until
+there is a separate product decision to replace it.
 
 ## Required Environment
 
@@ -53,7 +58,7 @@ APPLICATIONINSIGHTS_CONNECTION_STRING="<same App Insights connection connected t
 Keep `LUCY_OTEL_AGENT_ID` exactly equal to the OpenTelemetry Agent ID entered
 in the Foundry Register Asset form.
 
-## Register Lucy In Foundry
+## Register Lucy In Foundry (Interim Gateway Route)
 
 1. In Foundry, confirm the resource has an AI Gateway configured:
    Operate -> Admin -> AI Gateway.
@@ -69,7 +74,7 @@ in the Foundry Register Asset form.
    - Agent name: `Lucy (ACA Gateway)`
 5. Configure the AI Gateway/APIM outbound policy to add:
    `X-Agent-Token: <LUCY_GATEWAY_API_TOKEN>`.
-6. Use the Foundry-issued APIM URL for eval/playground traffic.
+6. Use the Foundry-issued APIM URL for interim eval/playground traffic while the Hosted Agent path is built.
 
 Known RBAC note: the gateway ACA managed identity can create project agent
 versions and call the project Responses endpoint, but managed application
@@ -143,9 +148,9 @@ Seed cases live at `agent/evals/cases.jsonl`. They cover:
 Use those cases for the initial Foundry eval rule setup, then replace placeholder
 authenticated IDs with safe staging records before running tool-writing cases.
 
-## Monitor Acceptance
+## Interim Monitor Acceptance
 
-Foundry Monitor is ready when:
+The gateway bridge is healthy when:
 
 - new APIM/Foundry URL reaches Lucy successfully
 - traces land in the same Application Insights resource as the Foundry project
@@ -153,9 +158,71 @@ Foundry Monitor is ready when:
 - tool spans appear with `gen_ai.tool.name`
 - continuous evaluation produces scores on sampled traffic
 
+## Hosted Agent Target
+
+The production target is a Hosted Agent version, not the custom-agent gateway
+registration. The first supported-region Hosted canary is now live in North
+Central US:
+
+- Resource group: `agent-lucy-ncus`
+- Foundry account: `agent-lucy-foundry-ncus`
+- Foundry project: `agent-lucy-prj-ncus`
+- Project endpoint:
+  `https://agent-lucy-foundry-ncus.services.ai.azure.com/api/projects/agent-lucy-prj-ncus`
+- ACR: `agentlucyacrncus.azurecr.io`
+- Model deployment: `gpt-5.2`
+- Hosted Agent: `agent-lucy-hosted-ncus:4`
+- Hosted image:
+  `agentlucyacrncus.azurecr.io/agent-lucy-hosted:hosted-20260428212030`
+- Basic SDK smoke: `status=completed`, `error=None`,
+  `output_text="Lucy Hosted is online."`
+
+The Hosted Agent endpoint is invoked through the Foundry project agent route:
+
+```text
+{project_endpoint}/agents/agent-lucy-hosted-ncus/endpoint/protocols/openai/responses?api-version=v1
+```
+
+Prefer SDK invocation during canary:
+
+```python
+project.get_openai_client(agent_name="agent-lucy-hosted-ncus").responses.create(input="...")
+```
+
+The Hosted Agent work should continue to:
+
+- use `agent/hosted_agent/app.py` as the protocol adapter around
+  `LucyRuntime.respond()` using `azure-ai-agentserver-responses` /
+  `ResponsesAgentServerHost`
+- serve the protocol container on port `8088` with
+  `agent/hosted_agent/Dockerfile`
+- build and push a `linux/amd64` image to ACR
+- create a Hosted Agent version with `agent/hosted_agent/deploy_hosted_agent.py`
+  (`HostedAgentDefinition` + `AgentProtocol.RESPONSES`)
+- preserve Chainlit as the public member UI and treat the hosted endpoint as the
+  Foundry-managed agent runtime endpoint
+- verify first-class traces, token accounting, dashboards, and Evals v2 before
+  retiring the interim gateway route
+
+The East US2 `create_version` attempt against project `agent-lucy-prj-eus2`
+returned `bad_request: The requested experience is not available for this
+subscription.` Treat the East US2 gateway route as the interim production bridge
+until Microsoft enables Hosted Agents there or until the product deliberately
+cuts over to the North Central US Hosted path.
+
+Before broad production cutover, move secret-bearing runtime configuration out
+of plain Hosted version environment variables and into managed identity, Key
+Vault, or a secret-backed pattern supported by the Hosted Agent control plane.
+
 ## References
 
-- Microsoft Learn, Register and manage custom agents:
+- Microsoft Learn, Hosted agents:
+  https://learn.microsoft.com/en-us/azure/foundry/agents/concepts/hosted-agents
+- Microsoft Learn, Deploy a hosted agent:
+  https://learn.microsoft.com/en-us/azure/foundry/agents/how-to/deploy-hosted-agent
+- Microsoft Learn, ResponsesAgentServerHost:
+  https://learn.microsoft.com/en-us/python/api/azure-ai-agentserver-responses/azure.ai.agentserver.responses.responsesagentserverhost
+- Microsoft Learn, Register and manage custom agents (interim gateway route):
   https://learn.microsoft.com/en-us/azure/foundry/control-plane/register-custom-agent
 - Microsoft Learn, Agent Monitoring Dashboard:
   https://learn.microsoft.com/en-us/azure/foundry/observability/how-to/how-to-monitor-agents-dashboard

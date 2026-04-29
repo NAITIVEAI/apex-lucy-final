@@ -88,7 +88,7 @@ def get_agent_reasoning_effort(model_deployment: Optional[str] = None) -> str:
 
 
 def get_agent_name() -> str:
-    return os.getenv("FOUNDRY_AGENT_NAME") or "lucy"
+    return os.getenv("LUCY_FOUNDRY_AGENT_NAME") or os.getenv("FOUNDRY_AGENT_NAME") or "lucy"
 
 
 def get_application_name_for_agent() -> str:

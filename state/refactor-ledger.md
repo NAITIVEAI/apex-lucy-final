@@ -8,18 +8,18 @@ This ledger records every plan from `/plans/` along with its status, summary, fi
 
 ## Active Plan
 
-### `001-lucy-foundry-hosted-agent-migration.md` — IN PROGRESS (Phase 1 only)
+### `001-lucy-foundry-hosted-agent-migration.md` — IN PROGRESS
 
-**Status:** in_progress; **scope reduced** 2026-04-25 to Phase 1 (runtime extraction) and Phase 2 (artifact/handoff abstractions). Phases 3-8 (Hosted Agent container, identity/RBAC for Hosted Agent, hosted-agent canary/cutover) are **demoted to future/optional** — the team is taking the AI Gateway custom-agent registration path (plan 002) instead, which uses the same `LucyRuntime` extraction without needing a Hosted Agent container.
+**Status:** in_progress. Phase 1 (runtime extraction) and Phase 2 (artifact/handoff abstractions) are complete. The 2026-04-25 gateway pivot is now understood as an interim bridge, not the target architecture. Phase 3 Hosted Agent adapter/container/deployment scaffold is code-complete. Phase 4 (supported-region Hosted Agent identity/RBAC and first Hosted deployment) is provisioned in North Central US as of 2026-04-29. Phases 5-8 (notice/auth/PDF/HITL canary, Chainlit hosted-endpoint cutover, parity validation, and gateway retirement) remain pending.
 
-**Goal (revised):** Extract a UI-independent `LucyRuntime` core out of `agent/app/apex.py` so it can be invoked from (a) Chainlit (existing), (b) a thin FastAPI HTTP wrapper for AI Gateway custom-agent registration (plan 002).
+**Goal (revised 2026-04-28):** Extract and preserve a UI-independent `LucyRuntime` core out of `agent/app/apex.py` so it can be invoked from (a) Chainlit (existing member UI), (b) the current FastAPI HTTP wrapper used as an interim AI Gateway custom-agent bridge, and (c) a Hosted Agent Responses protocol adapter (`azure-ai-agentserver-responses`) on the Foundry Hosted Agent serving surface.
 
 **Active sub-objective (Phase 1, "Recommended First Sprint" §1-6 from plan):**
 1. `LucySession`, `LucyRequest`, `LucyResponse`, `LucyArtifact` data models — **DONE 2026-04-25**
 2. Extract tool-list construction (`_build_lucy_function_list`, `_build_function_registry`, `_toolset_signature`) → `lucy_core/tool_registry.py` — **DONE 2026-04-25**
 3. Extract Responses loop (`_run_response_v2`, `_extract_v2_function_calls`, `_execute_v2_tool_call`, `_build_authenticated_state_items`) → `lucy_core/responses_loop.py` — **DONE 2026-04-25** (split into 3a small helpers + 3b the full orchestrator; apex.py wrappers map cl.user_session ↔ LucySession at the boundary)
 4. Build `LucyRuntime.respond()` in `lucy_core/runtime.py` — **DONE 2026-04-25** (minimal: constructor takes pre-init deps, single `async respond(LucyRequest) -> LucyResponse`. **Not yet wired into any production code path** — it's a building block for the FastAPI HTTP wrapper in plan 002 Phase A)
-5. Adapt Chainlit `@cl.on_message` to call `LucyRuntime.respond()` — **deferred**. Optional for the AI Gateway registration path; Chainlit can keep using the existing `_run_response_v2` adapter that itself delegates into `lucy_core.responses_loop`. Revisit if/when convergence on a single in-process invocation path becomes valuable.
+5. Adapt Chainlit `@cl.on_message` to call `LucyRuntime.respond()` — **deferred**. Still useful for convergence, but not required before Hosted Agent work if the Hosted protocol adapter can invoke `LucyRuntime` directly.
 6. Unit tests with mocked Responses client — **DONE 2026-04-25** (78 tests across data models, tool registry, responses loop, runtime; orchestrator tests use IsolatedAsyncioTestCase with a queued-response mock client)
 
 **Test count:** 78 passing (was 29 at session start).
@@ -168,10 +168,9 @@ Follow-up:
 
 ---
 
-### `002-foundry-ai-gateway-custom-agent-registration.md` — IMPLEMENTED / LIVE SMOKE PASSED 2026-04-27
+### `002-foundry-ai-gateway-custom-agent-registration.md` — INTERIM BRIDGE / LIVE SMOKE PASSED 2026-04-27
 
-**Status:** implemented for Lucy's gateway-facing ACA runtime; Foundry portal/APIM
-registration remains the operator-side click/config step.
+**Status:** implemented for Lucy's gateway-facing ACA runtime as an interim Foundry visibility bridge. This is not the final integration target. The final target remains Foundry Hosted Agent using the Responses protocol container surface.
 
 **Summary:**
 - Added production gateway wiring for Lucy's custom ACA runtime without moving Lucy
@@ -252,14 +251,11 @@ registration remains the operator-side click/config step.
   application deployment reconciliation.
 
 **Follow-ups:**
-- Register the custom agent in the Foundry portal against
-  `https://agent-lucy-gateway-eus2.purpleocean-f3514433.eastus2.azurecontainerapps.io/agent/respond`
-  with OpenTelemetry agent ID `lucy-aca`.
-- Configure the AI Gateway/APIM outbound policy to send
-  `X-Agent-Token: <LUCY_GATEWAY_API_TOKEN>`.
-- Confirm Foundry Monitor shows spans with `gen_ai.agents.id="lucy-aca"` and
-  `gen_ai.tool.name`.
-- Build Foundry continuous eval rules from `agent/evals/cases.jsonl`.
+- Keep the registered AI Gateway/APIM custom-agent route available as a smoke/eval bridge while Hosted Agent is being built.
+- Do not treat the gateway route as the production end-state unless Hosted Agent proves blocked.
+- Build a Hosted Agent protocol adapter around `LucyRuntime.respond()` using `azure-ai-agentserver-responses`, served on port `8088`.
+- Deploy a Hosted Agent version via `AIProjectClient.agents.create_version(...)` / `HostedAgentDefinition` and compare trace, token, dashboard, and eval behavior against the interim gateway route.
+- Retire or downgrade the custom-agent gateway route only after Hosted Agent proves notice auth, tool execution, PDF artifact handling, HITL behavior, traces, token accounting, and evals.
 
 **Live hotfix 2026-04-27 — context preservation after auth/reconnect:**
 - User logs showed Chainlit fired `on_chat_start` again after a pause/reconnect,
@@ -310,6 +306,322 @@ registration remains the operator-side click/config step.
   remain idempotent and preserve `conversation_id`, `previous_response_id`, and
   pending task metadata.
 
+**Hosted Agent scaffold 2026-04-28 — CODE-COMPLETE LOCALLY / CANARY PENDING:**
+- Added `agent/hosted_agent/app.py`, a Responses protocol adapter using
+  `ResponsesAgentServerHost`. The handler maps Foundry `CreateResponse` input
+  plus `ResponseContext` into `LucyRequest`, calls `LucyRuntime.respond()`, and
+  emits Responses protocol events with Lucy text plus metadata carrying session,
+  artifacts, tool calls, handoff state, trace ID, and errors.
+- Added `agent/app/lucy_core/runtime_factory.py` so both the interim FastAPI
+  gateway wrapper and the Hosted Agent adapter use the same apex-backed runtime
+  initialization instead of duplicating production tool-registry logic.
+- Updated `agent/app/lucy_core/http_app.py` to consume the shared runtime
+  factory; gateway behavior is unchanged.
+- Added `agent/hosted_agent/Dockerfile` for the Hosted process. It runs on
+  port `8088`, installs `azure-ai-agentserver-responses`, keeps Chainlit deps
+  available only because apex/tool imports still require them, installs the
+  Debian CA bundle for Azure outbound TLS, and defaults GenAI content recording
+  to `false`.
+- Added `agent/hosted_agent/deploy_hosted_agent.py` to create hosted versions
+  via `AIProjectClient.agents.create_version(...)` with
+  `HostedAgentDefinition(container_protocol_versions=[responses])`, carrying
+  safe telemetry defaults and selected runtime env vars.
+- Added `agent/hosted_agent/README.md` with local smoke, ACR build, hosted
+  version creation, and canary/cutover rules.
+- Added `agent/tests/test_hosted_agent_adapter.py` covering Hosted request to
+  `LucyRequest` mapping, session continuity fields, pending notice metadata,
+  artifact/tool/handoff metadata propagation, and response-event conversion.
+
+**Hosted Agent research evidence used:**
+- Microsoft Learn Hosted Agents docs (last updated 2026-04-28) confirm hosted
+  agents are containerized custom code with Foundry-managed lifecycle,
+  observability, versioning, dedicated endpoint, and per-agent Entra identity.
+- Microsoft Learn Hosted Agents docs confirm Responses is the right protocol
+  for conversational/multi-turn agents and that Hosted endpoints are exposed at
+  `{project_endpoint}/agents/{name}/endpoint/protocols/openai/v1/responses`.
+- Microsoft Learn Deploy Hosted Agent docs confirm `linux/amd64`, local port
+  `8088`, `azure-ai-agentserver-responses`, `/readiness`, platform-injected
+  `FOUNDRY_*` and `APPLICATIONINSIGHTS_CONNECTION_STRING`, and SDK creation via
+  `HostedAgentDefinition` / `ProtocolVersionRecord(AgentProtocol.RESPONSES)`.
+- Microsoft Learn `ResponsesAgentServerHost` API docs confirm the handler shape
+  `(request, context, cancellation_signal)` and that `run()` defaults to
+  `PORT` or `8088`.
+- Local SDK inspection of `azure-ai-agentserver-responses==1.0.0b5` confirmed
+  `ResponseContext.get_input_text()`, `context.conversation_id`, private
+  `_previous_response_id`, and `ResponseEventStream` lifecycle methods used by
+  the adapter.
+
+**Hosted Agent tests run:**
+- `python -m pytest -q agent/tests/test_hosted_agent_adapter.py`
+- `python -m py_compile agent/hosted_agent/app.py agent/hosted_agent/deploy_hosted_agent.py agent/app/lucy_core/runtime_factory.py`
+- `python -m pytest -q agent/tests/test_hosted_agent_adapter.py agent/tests/test_http_app.py agent/tests/test_lucy_runtime.py agent/tests/test_lucy_responses_loop.py agent/tests/test_lucy_session.py`
+
+**Hosted Agent results:**
+- Hosted adapter unit tests: `4 passed`.
+- Py compile: passed.
+- Nearby Lucy-core and HTTP-wrapper regression set: `49 passed, 1 skipped`.
+
+**Hosted Agent North Central US launch 2026-04-29 — DEPLOYED / BASIC SMOKE PASSED:**
+- Provisioned supported-region resources after East US2 Hosted Agent creation
+  returned `bad_request: The requested experience is not available for this
+  subscription.`
+- North Central US resource group: `agent-lucy-ncus`.
+- North Central US Foundry account/project:
+  `agent-lucy-foundry-ncus` / `agent-lucy-prj-ncus`.
+- North Central US project endpoint:
+  `https://agent-lucy-foundry-ncus.services.ai.azure.com/api/projects/agent-lucy-prj-ncus`.
+- North Central US ACR: `agentlucyacrncus.azurecr.io`.
+- Model deployment: `gpt-5.2` (`GlobalStandard`, capacity `1000`) on the North
+  Central Foundry account.
+- AI Search project connection copied into the North Central project as
+  `ailucyaisearchsyxvdy`.
+- Capability host created as `accountcaphost` with Hosted Agents public hosting
+  enabled.
+- Hosted Agent name/version: `agent-lucy-hosted-ncus:4`.
+- Hosted image:
+  `agentlucyacrncus.azurecr.io/agent-lucy-hosted:hosted-20260428212030`
+  (`sha256:310ffc2a3fb94760bcadc8bfccdc1e4d8ccee77a5bbc91cfbb4e8bb8e1e3da68`).
+- Hosted endpoint is exposed through the project agent route:
+  `{project_endpoint}/agents/agent-lucy-hosted-ncus/endpoint/protocols/openai/responses?api-version=v1`.
+- SDK invocation smoke passed using
+  `AIProjectClient(..., allow_preview=True).get_openai_client(agent_name="agent-lucy-hosted-ncus").responses.create(...)`.
+  Result: `status=completed`, `error=None`,
+  `output_text="Lucy Hosted is online."`, `agent_reference.version=4`.
+- Stopped older Hosted deployments `2` and `3` (`status=Stopped`); version `4`
+  remains the latest active version and its deployment status is `Running`.
+
+**Hosted Agent Azure launch fixes 2026-04-29:**
+- Version 1 failed startup because the platform probes hit `/liveness` and the
+  adapter only exposed the protocol server routes. Fixed by adding `/liveness`
+  and `/health` handlers in `agent/hosted_agent/app.py`.
+- Version 2 reached runtime but failed outbound Azure TLS with
+  `CERTIFICATE_VERIFY_FAILED` against the Foundry/OpenAI endpoint. Fixed by
+  installing `ca-certificates` and setting `SSL_CERT_FILE`,
+  `REQUESTS_CA_BUNDLE`, and `CURL_CA_BUNDLE` in the Hosted Dockerfile.
+- Version 3 exposed a name collision: Foundry Hosted injects/reserves
+  `FOUNDRY_AGENT_NAME`, which made Lucy's inner prompt-agent reconciler try to
+  recreate the hosted container agent as a prompt agent. Fixed by making
+  `agent/app/foundry_init.py` and `agent/app/foundry_publish.py` prefer
+  Hosted-safe `LUCY_FOUNDRY_AGENT_NAME` /
+  `LUCY_FOUNDRY_APPLICATION_NAME` aliases.
+- Current focused validation after these fixes:
+  `python -m py_compile agent/app/foundry_init.py agent/app/foundry_publish.py agent/hosted_agent/app.py`
+  and
+  `python -m pytest -q agent/tests/test_hosted_agent_adapter.py agent/tests/test_http_app.py agent/tests/test_lucy_runtime.py`
+  returned `9 passed, 1 skipped`.
+
+**Hosted Agent blockers / follow-ups:**
+- Azure launch attempted 2026-04-28. ACR build/push succeeded for hosted image
+  `agentlucyacreus2.azurecr.io/agent-lucy-hosted:hosted-20260428202447`
+  (`sha256:4c0fb4bfc86e8d02b542a09b14575bba4fbbcfea9f2fb4e53f8a2490c0d891f7`).
+- First `create_version` attempt failed validation because Hosted Agents reserve
+  `APPLICATIONINSIGHTS_CONNECTION_STRING`, all `AGENT_*`, all `FOUNDRY_*`, and
+  `PORT`. Fixed in code by adding Hosted-safe `LUCY_*` aliases and remapping
+  them inside the hosted container before apex imports.
+- Registered Azure feature
+  `Microsoft.CognitiveServices/FoundryComputePreview` and re-registered the
+  `Microsoft.CognitiveServices` provider successfully.
+- Retried `create_version` after payload fix and feature registration; it still
+  failed with `bad_request: The requested experience is not available for this
+  subscription.`
+- The East US2 Hosted Agent blocker was resolved by intentionally provisioning
+  a supported-region North Central US canary. Full parity is not proven yet.
+- Chainlit cutover intentionally not implemented yet. Per user plan, replace
+  the local `_run_response_v2(message.content)` branch with a Hosted endpoint
+  call only after Hosted canary proves notice auth, PDF artifacts, HITL,
+  traces, token accounting, evals, and 4+ minute idle/reconnect continuity.
+- Hosted container still imports apex.py and therefore keeps Chainlit installed
+  in the hosted image. This preserves production tool behavior but should be
+  reduced later by extracting remaining Chainlit-coupled tool side effects.
+- Security hardening before broad production cutover: current Hosted Agent
+  version creation carries runtime configuration in the immutable hosted version
+  definition. Move secret-bearing values to managed identity, Key Vault, or a
+  secret-backed deployment mechanism before relying on Hosted as the primary
+  public production path.
+- Continuous evaluation enablement 2026-04-29:
+  - Confirmed North Central project has an App Insights connection
+    `agent-lucy-appins-eus2-8540` pointing to `agent-lucy-appins-eus2`.
+  - Confirmed App Insights telemetry is landing for Hosted Agent traffic:
+    request `invoke_agent agent-lucy-hosted-ncus:4`, dependencies
+    `create_agent`, `invoke_agent agent-lucy-prod:1`, `execute_tool`, and
+    `chat gpt-5.2-2025-12-11`.
+  - Created continuous evaluation object
+    `eval_f15aaa52477a4780bfccf696788b80f4` named
+    `Lucy Hosted Continuous Safety Smoke`.
+  - Created enabled evaluation rule
+    `lucy-hosted-continuous-safety-smoke`, filtered to
+    `agent-lucy-hosted-ncus`, with safety smoke evaluators
+    `builtin.violence`, `builtin.hate_unfairness`, and `builtin.self_harm`.
+  - Added missing `Azure AI User` RBAC assignment for the North Central project
+    managed identity `d4f3d82d-0056-4e6f-93f8-d1be9b049d94` at the project
+    scope.
+  - Generated post-rule Hosted Agent traffic; continuous eval runs are created
+    but currently fail with AOAI `403 session_not_accessible`
+    (`inner_error.code=PermissionDenied`, `result_counts.total=0`).
+  - Tested header-based endpoint isolation as a possible fix; it did not change
+    the failure, so the agent endpoint was restored to Entra isolation.
+  - Follow-up: this is now a Foundry continuous-eval/session-access issue, not
+    a missing App Insights connection or missing evaluation rule. Escalate with
+    a failed run id such as
+    `continuousevalrun_fe43df91-a89d-41d7-8c30-79b656c1559c` and request id
+    `87fac10263082650e4763462a4a160d6`.
+- Hosted Agent operational update 2026-04-29:
+  - Expanded the North Central project managed identity RBAC after the first
+    eval failures: `Azure AI User`, `Cognitive Services User`, and
+    `Cognitive Services OpenAI User` are assigned at both the Foundry account
+    and project scopes; `AcrPull` remains assigned on the NCUS ACR.
+  - Created a second continuous evaluation rule for the inner prompt agent:
+    `lucy-inner-prompt-continuous-safety-smoke`, filtered to
+    `agent-lucy-prod`, backed by eval
+    `eval_ab4a9b6cb3204e40a66b047bda5e2ed1`.
+  - Verified inner prompt-agent continuous evaluation produces completed runs
+    when Lucy traffic invokes the inner prompt agent. Latest completed examples
+    include `continuousevalrun_df7ee52a-7cdc-4cbb-bbd9-61cf131a04f1` and
+    `continuousevalrun_ba980217-00d0-4c0b-82ea-a043dbc80bd0`.
+  - Re-tested Hosted Agent continuous evaluation after RBAC expansion and after
+    restoring endpoint isolation to Entra. Hosted-targeted continuous eval still
+    fails with `session_not_accessible`; this isolates the failure to the outer
+    Hosted Agent session access path, not APIM, AI Gateway, missing App
+    Insights, missing eval rule, or missing project identity role.
+    Latest failed v5 example:
+    `continuousevalrun_f4fa020b-99b8-4253-b3b6-5362e294e10d`, request id
+    `c64c5956c38a99315d96cedc8a8a4560`.
+  - Confirmed the North Central resource group has no APIM service. The only
+    APIM gateway resource is the legacy/interim East US2
+    `apexclassaction-ai-gw`, so it is not in the direct Hosted Agent request
+    path.
+  - Built and activated `agent-lucy-hosted-ncus:5` from image
+    `agentlucyacrncus.azurecr.io/agent-lucy-hosted:hosted-20260429112236`
+    (`sha256:e227a01e23340fef80b4dd64c1779c1abfe0c38dbaf1cf1f4185f2fe480555ef`).
+    Version 5 carries the same runtime configuration as version 4, plus
+    `AZURE_TRACING_GEN_AI_CONTENT_RECORDING_ENABLED=false` and
+    `LUCY_CHAINLIT_NOTICE_PROGRESS=false`.
+  - SDK smoke against `agent-lucy-hosted-ncus` after version 5 activation
+    returned `status=completed`, `error=None`, and
+    `output_text="Lucy hosted v5 is online."`
+  - App Insights confirmed fresh version 5 telemetry after the smoke:
+    request `invoke_agent agent-lucy-hosted-ncus:5`, plus dependencies
+    `create_agent`, `invoke_agent agent-lucy-prod:1`, `execute_tool`, and
+    `chat gpt-5.2-2025-12-11`.
+  - Latest inner prompt-agent continuous eval runs after the v5 smoke completed:
+    `continuousevalrun_d891693c-ff26-40a1-89a1-9caa869ea093` and
+    `continuousevalrun_69715048-31b0-4419-96a5-53731d465ac1`.
+  - Hosted Agent telemetry normalization 2026-04-29:
+    - Found the built-in App Insights `Agents (preview)` workbook parameter
+      still failing even though raw telemetry already had canonical Hosted
+      Agent dimensions on v5 rows:
+      `gen_ai.agent.name=agent-lucy-hosted-ncus`,
+      `gen_ai.agent.id=agent-lucy-hosted-ncus:5`, and
+      `gen_ai.agent.version=5`.
+    - Found Lucy's custom `create_agent` span still emitted the legacy plural
+      dimension `gen_ai.agents.id=lucy-aca` via the default
+      `LUCY_OTEL_AGENT_ID`, which could confuse preview workbook parsing.
+    - Updated `agent/app/lucy_core/responses_loop.py` to emit canonical
+      `gen_ai.agent.id` / `gen_ai.agent.name` on Lucy's custom span instead of
+      plural `gen_ai.agents.*`.
+    - Updated `agent/hosted_agent/deploy_hosted_agent.py` so Hosted Agent
+      version creation defaults `LUCY_OTEL_AGENT_ID` to the hosted agent name
+      (`agent-lucy-hosted-ncus`) instead of inheriting any stale gateway value.
+    - Built/pushed hosted image
+      `agentlucyacrncus.azurecr.io/agent-lucy-hosted:hosted-20260429050051-agentattrs`
+      (`sha256:ba549bc102c82df4204a7903f072863112525719bfb1b0160d8543fbe25448b2`)
+      and activated `agent-lucy-hosted-ncus:6`.
+    - SDK smoke against version 6 returned `status=completed`, `error=None`,
+      response id `caresp_82fdcc0cecf421a700DqDEHHXgzdHaX0lE19hYl4a0BiAsTtqS`,
+      and output text `Lucy hosted the v6 telemetry smoke test successfully.`
+    - App Insights KQL confirmed fresh v6 request, `create_agent`, and
+      `execute_tool` rows all have `gen_ai.agent.name=agent-lucy-hosted-ncus`,
+      `gen_ai.agent.id=agent-lucy-hosted-ncus:6`,
+      `gen_ai.agent.version=6`, and no stale `gen_ai.agents.id`.
+  - Hosted Agent RBAC/search/dashboard cleanup 2026-04-29:
+    - Diagnosed the remaining startup reconciliation failure as RBAC on the
+      Hosted Agent runtime managed identity. Runtime identity:
+      `bf64d26c-34a5-4bc8-a1b2-b22e9ff24b67`; blueprint application:
+      `6059843d-af51-4c95-a409-e117f46605ab`.
+    - Assigned built-in role `Azure AI Project Manager` to runtime identity
+      `bf64d26c-34a5-4bc8-a1b2-b22e9ff24b67` at project scope
+      `/subscriptions/22f9f915-587f-4a9a-acff-69b061ef48e1/resourceGroups/agent-lucy-ncus/providers/Microsoft.CognitiveServices/accounts/agent-lucy-foundry-ncus/projects/agent-lucy-prj-ncus`.
+      This role covers the missing
+      `Microsoft.CognitiveServices/accounts/projects/applications/write`
+      action. Attempting to assign the same role to the blueprint failed
+      because Azure reports it as principal type `Application`, not a
+      role-assignable service principal.
+    - Resolved the secondary startup ambiguity by carrying the full
+      `AI_SEARCH_PROJECT_CONNECTION_ID` into Hosted versions:
+      `/subscriptions/22f9f915-587f-4a9a-acff-69b061ef48e1/resourceGroups/agent-lucy-ncus/providers/Microsoft.CognitiveServices/accounts/agent-lucy-foundry-ncus/projects/agent-lucy-prj-ncus/connections/ailucyaisearchsyxvdy`.
+    - Gated Chainlit dashboard-route registration behind
+      `LUCY_DASHBOARD_ROUTES_ENABLED` / `LUCY_CHAINLIT_ENABLED`; Hosted sets
+      both false so importing `apex.py` no longer logs
+      `Failed to setup dashboard routes: 'app'`.
+    - Built/pushed hosted image
+      `agentlucyacrncus.azurecr.io/agent-lucy-hosted:hosted-20260429051054-rbac-dashboard`
+      (`sha256:c389fc86ed3ae6850d74db18583a5e8498613278a54ce71b4705bf48df16d30e`)
+      and activated `agent-lucy-hosted-ncus:8`.
+    - SDK smoke against version 8 returned `status=completed`, `error=None`,
+      response id `caresp_e39cb37ecf44b94e00mYcReQTjjYUncDkYOEfos8b2puEO5mrd`.
+    - App Insights KQL for the v8 response shows:
+      `Foundry v2 agent loaded from reconciled publication state:
+      agent-lucy-prod:1 (agent-lucy-prod/agent-lucy-prod)`, no new
+      `AuthorizationFailed` / `applications/write` error, startup
+      `search_connection_id_set=True`, and `Dashboard routes disabled for this
+      process` instead of the previous dashboard-route error.
+    - User-observed portal state after v8: Lucy is "prestable, barely."
+      The main Foundry/App Insights ops dashboard is still not populating
+      reliably, but the metrics under the specific Agent surface are
+      populating. Treat raw App Insights KQL plus the Agent metrics surface as
+      the current proof path; do not claim the top-level ops dashboard is fixed
+      until it is visibly populated in the portal.
+- Member-facing ACA operational update 2026-04-29:
+  - Disabled GenAI content recording on `agent-lucy-eus2` by setting
+    `AZURE_TRACING_GEN_AI_CONTENT_RECORDING_ENABLED=false`.
+  - Added and deployed `LUCY_CHAINLIT_NOTICE_PROGRESS=false` to prevent the
+    sync notice retrieval tool from attempting Chainlit progress UI writes when
+    it is running outside a valid Chainlit request context. This removes the
+    noisy `Chainlit context not found` executor errors while preserving notice
+    retrieval, SAS generation, PDF markers, and response content.
+  - Built/pushed EUS2 image
+    `agentlucyacreus2.azurecr.io/agent-lucy-eus2:codex-notice-progress-20260429111909`
+    (`sha256:14352be9d0c922a3922cc9076e666e583830d3c91494b436d6e1cced92b7a6cc`)
+    and deployed it to revision `agent-lucy-eus2--0000066`.
+  - Verified revision `agent-lucy-eus2--0000066` is latest ready, Chainlit
+    returns HTML on the public root, and startup logs show Foundry init plus
+    HTTP wrapper readiness on port `8002`.
+- Gateway/APIM route remains the rollback and diagnostics bridge until Hosted
+  Agent parity is proven.
+
+**COA reason writeback slice 2026-04-29 — IMPLEMENTED WITH SCHEMA AMBIGUITY GUARD:**
+- Triggering instruction: user requested the Lucy COA-reason writeback in the
+  address-update path. The expected `/plans/004-coa-audit-writeback.md` file is
+  not present in this repo, and `.agents/skills/lucy-spec-implementation/SKILL.md`
+  is still missing, so the explicit user instruction drove this bounded slice.
+- Files changed:
+  - `agent/app/user_functions.py`
+  - `portal/app/user_functions.py`
+  - `agent/tests/test_coa_reason_writeback.py`
+- Summary:
+  - Added COA reason schema discovery around `new_classmembers` metadata.
+  - Lucy address updates now add the confirmed text COA reason field to the same
+    Dynamics PATCH payload as the address fields.
+  - Address updates now fail closed before PATCH when the COA reason field is
+    missing, metadata is unavailable, or the matching field is a non-text type
+    without a confirmed stored value.
+  - Mirrored the behavior in the portal copy so the duplicate address-update
+    surface does not drift.
+- Research evidence:
+  - Official Dataverse Web API docs confirm row updates use PATCH.
+  - Official Dataverse docs confirm choice columns use integer values rather
+    than display labels, so non-text COA fields remain blocked until the stored
+    option value is confirmed.
+- Tests run:
+  - `python -m pytest -q agent/tests/test_coa_reason_writeback.py` → 3 passed.
+  - `python -m py_compile agent/app/user_functions.py portal/app/user_functions.py agent/tests/test_coa_reason_writeback.py` → passed.
+- Blockers / ambiguity:
+  - No checked-in schema/constant identifies the exact production COA reason
+    logical name or confirms whether it is text vs choice.
+  - Local environment has no `D365_*` credentials, so live metadata could not be
+    queried from this workspace. Full closure still needs a live metadata check
+    or committed schema constant for the exact field/value.
+
 ---
 
 ## Completed Plans
@@ -324,9 +636,9 @@ _none_
 
 ---
 
-## Demoted / Future Scope
+## Restored / Current Target Scope
 
-- **Plan 001 Phases 3-8** (Hosted Agent container, hosted-agent identity/RBAC, hosted-agent canary/cutover) — demoted 2026-04-25 in favor of plan 002. Kept in plan 001 file for architectural reasoning. Re-prompt only if AI Gateway path proves insufficient.
+- **Plan 001 Phases 3-8** (Hosted Agent container, hosted-agent identity/RBAC, hosted-agent canary/cutover) — restored 2026-04-28 as the golden path. The AI Gateway custom-agent route remains an interim bridge and diagnostic fallback, not the desired end-state.
 
 ---
 

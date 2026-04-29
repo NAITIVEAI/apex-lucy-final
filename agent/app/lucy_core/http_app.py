@@ -17,7 +17,7 @@ Auth:
 OpenTelemetry agent ID:
     LUCY_OTEL_AGENT_ID env var (default "lucy-aca"). This is the value Foundry
     uses to correlate traces to the registered custom agent. Per-request
-    GenAI-conformant spans (gen_ai.agents.id, gen_ai.system, etc.) are emitted
+    GenAI-conformant spans (gen_ai.agent.*, gen_ai.system, etc.) are emitted
     by lucy_core.responses_loop.
 """
 
@@ -32,6 +32,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException
 from pydantic import BaseModel, ConfigDict
 
 from .runtime import LucyRuntime
+from .runtime_factory import default_runtime_factory
 from .session import LucyArtifact, LucyRequest, LucyResponse, LucySession
 
 logger = logging.getLogger(__name__)
@@ -199,47 +200,7 @@ def _check_token(x_agent_token: Optional[str] = Header(default=None)) -> None:
 # ---------------------------------------------------------------------------
 
 
-async def _default_runtime_factory() -> LucyRuntime:
-    """Production runtime factory.
-
-    Imports apex.py and reuses its Foundry init + tool registry. apex.py
-    requires chainlit to be importable, which it is in the Lucy ACA container
-    (Chainlit and this FastAPI process run side-by-side).
-
-    Both processes initialize independently against the same Foundry agent
-    (`lucy-prod`) — they each call _initialize_persistent_agent_v2(), find
-    the existing version, and load the SAME function_registry from the same
-    apex.py code. Lucy's tools stay locked: there is no second tool registry
-    to drift from production.
-    """
-    import apex
-
-    await apex._initialize_persistent_agent_v2()
-    if not (apex.openai_client and apex.agent_name and apex.agent_version):
-        raise RuntimeError(
-            "apex._initialize_persistent_agent_v2() returned but globals are "
-            "not set. Cannot construct LucyRuntime."
-        )
-    logger.info(
-        "🟢 Lucy HTTP wrapper bound to apex globals: agent=%s version=%s tools=%d",
-        apex.agent_name,
-        apex.agent_version,
-        len(apex.v2_function_registry or {}),
-    )
-    runtime = LucyRuntime(
-        openai_client=apex.openai_client,
-        agent_name=apex.agent_name,
-        agent_version=apex.agent_version,
-        function_registry=apex.v2_function_registry,
-    )
-    # Health checks need a read-only Foundry probe, but LucyRuntime keeps the
-    # request path focused on Responses dependencies. Attach as diagnostic-only
-    # state instead of widening the constructor contract.
-    runtime.project_client = apex.project_client
-    return runtime
-
-
-def create_app(*, runtime_factory=_default_runtime_factory) -> FastAPI:
+def create_app(*, runtime_factory=default_runtime_factory) -> FastAPI:
     """Construct the FastAPI app.
 
     `runtime_factory`: an async or sync callable returning a LucyRuntime.

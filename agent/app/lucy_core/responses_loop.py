@@ -287,8 +287,8 @@ async def run_response_v2(
     before calling — this function does not initialize the Foundry client.
 
     Emits an OpenTelemetry span named "create_agent" with GenAI semantic-
-    convention attributes (`operation`, `gen_ai.agents.id`, `gen_ai.system`,
-    `gen_ai.request.model`). Foundry's Monitor tab filters by `gen_ai.agents.id`.
+    convention attributes (`operation`, `gen_ai.agent.id`, `gen_ai.agent.name`,
+    `gen_ai.system`, `gen_ai.request.model`).
     """
     otel_agent_id = os.getenv("LUCY_OTEL_AGENT_ID", "lucy-aca")
     with _tracer.start_as_current_span(
@@ -296,8 +296,8 @@ async def run_response_v2(
         attributes={
             "operation": "create_agent",
             "gen_ai.operation.name": "create_agent",
-            "gen_ai.agents.id": otel_agent_id,
-            "gen_ai.agents.name": otel_agent_id,
+            "gen_ai.agent.id": otel_agent_id,
+            "gen_ai.agent.name": otel_agent_id,
             "gen_ai.system": "azure.ai.foundry",
             "gen_ai.request.model": agent_name,
             "lucy.session.id": session.session_id,

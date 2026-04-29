@@ -498,6 +498,88 @@ DYNAMICS_ENABLED = all(DYNAMICS_CONFIG.values())
 if not DYNAMICS_ENABLED:
     logger.warning("⚠️ Dynamics 365 credentials incomplete or missing")
 
+_ENTITY_FIELDS_CACHE: Dict[str, Dict[str, Any]] = {}
+_ENTITY_FIELDS_CACHE_TTL = 60 * 30  # 30 minutes
+_ADDRESS_UPDATE_FIELDS = {
+    "new_address",
+    "new_address1",
+    "address1_line1",
+    "address1_line2",
+    "new_city",
+    "address1_city",
+    "new_state",
+    "new_stateorprovince",
+    "address1_stateorprovince",
+    "new_zip",
+    "new_postalcode",
+    "address1_postalcode",
+}
+_COA_REASON_FIELD_CANDIDATES = (
+    "new_coareason",
+    "new_coa_reason",
+    "new_changeofaddressreason",
+    "new_changeofaddress_reason",
+    "new_addresschangereason",
+    "new_address_change_reason",
+)
+_TEXT_ATTRIBUTE_TYPES = {"string", "memo"}
+_COA_REASON_VALUE = "Lucy-driven address update"
+
+
+def _get_entity_attributes_cached(entity: str) -> List[Dict[str, Any]]:
+    import time
+    cache = _ENTITY_FIELDS_CACHE.get(entity)
+    now = time.time()
+    if cache and (now - cache.get("ts", 0) < _ENTITY_FIELDS_CACHE_TTL) and "attributes" in cache:
+        return cache.get("attributes", [])
+    try:
+        metadata = _safe_async_run(get_entity_metadata(entity))
+        attributes = metadata.get("value", []) if isinstance(metadata, dict) else []
+        fields = {
+            attr.get("LogicalName")
+            for attr in attributes
+            if isinstance(attr, dict) and attr.get("LogicalName")
+        }
+        _ENTITY_FIELDS_CACHE[entity] = {"ts": now, "fields": fields, "attributes": attributes}
+        logger.info(f"✅ Cached {len(fields)} fields for entity {entity}")
+        return attributes
+    except Exception as exc:
+        logger.warning(f"⚠️ Failed to fetch metadata for {entity}: {exc}")
+        return []
+
+
+def _has_address_update(updates: Dict[str, Any]) -> bool:
+    return any(field in _ADDRESS_UPDATE_FIELDS for field in updates)
+
+
+def _build_coa_reason_update(entity: str) -> tuple[Dict[str, Any], Optional[str]]:
+    attributes = _get_entity_attributes_cached(entity)
+    if not attributes:
+        return {}, "Unable to confirm COA reason schema from Dynamics metadata; address update was not submitted."
+
+    by_logical_name = {
+        str(attr.get("LogicalName", "")).lower(): attr
+        for attr in attributes
+        if isinstance(attr, dict) and attr.get("LogicalName")
+    }
+    for candidate in _COA_REASON_FIELD_CANDIDATES:
+        attribute = by_logical_name.get(candidate)
+        if not attribute:
+            continue
+        logical_name = attribute.get("LogicalName")
+        attribute_type = str(attribute.get("AttributeType") or "").lower()
+        if attribute_type in _TEXT_ATTRIBUTE_TYPES:
+            return {logical_name: _COA_REASON_VALUE}, None
+        return {}, (
+            f"COA reason field {logical_name} is {attribute_type or 'unknown'}; "
+            "no confirmed text/choice value is available, so address update was not submitted."
+        )
+
+    return {}, (
+        "No confirmed COA reason field found on new_classmembers; "
+        "address update was not submitted."
+    )
+
 # Entity name and field mapping to handle specific naming conventions
 ENTITY_NAME_MAP = {
     "new_classactioncases": "incidents",  # Map to actual entity name
@@ -1004,6 +1086,16 @@ def update_member_profile_sync(apex_id: str, field_updates: Dict[str, Any]) -> s
 
         # Filter to only allowed fields
         safe_updates = {k: v for k, v in field_updates.items() if k in allowed_fields}
+        if _has_address_update(safe_updates):
+            coa_update, coa_error = _build_coa_reason_update("new_classmembers")
+            if coa_error:
+                logger.error("COA reason writeback blocked address update for %s: %s", apex_id, coa_error)
+                return json.dumps({
+                    "success": False,
+                    "error": coa_error,
+                    "attempted_updates": safe_updates
+                })
+            safe_updates.update(coa_update)
 
         if not safe_updates:
             return json.dumps({
@@ -4089,6 +4181,16 @@ async def smart_update_member(apex_id: str, update_request: str) -> Dict[str, An
     try:
         # Parse the update request to extract field updates
         field_updates = parse_agentic_update_request(update_request)
+        if _has_address_update(field_updates):
+            coa_update, coa_error = _build_coa_reason_update("new_classmembers")
+            if coa_error:
+                logger.error("COA reason writeback blocked smart address update for %s: %s", apex_id, coa_error)
+                return {
+                    "success": False,
+                    "error": coa_error,
+                    "attempted_updates": field_updates
+                }
+            field_updates.update(coa_update)
 
         if not field_updates:
             return {

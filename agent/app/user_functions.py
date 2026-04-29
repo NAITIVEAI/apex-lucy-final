@@ -639,27 +639,93 @@ _FIELD_ALIASES = {
     "new_phonenumber": ["new_phonenumber", "telephone1", "phone"],
 }
 
+_ADDRESS_UPDATE_FIELDS = {
+    "new_address",
+    "new_address1",
+    "address1_line1",
+    "address1_line2",
+    "new_city",
+    "address1_city",
+    "new_state",
+    "new_stateorprovince",
+    "address1_stateorprovince",
+    "new_zip",
+    "new_postalcode",
+    "address1_postalcode",
+}
+_COA_REASON_FIELD_CANDIDATES = (
+    "new_coareason",
+    "new_coa_reason",
+    "new_changeofaddressreason",
+    "new_changeofaddress_reason",
+    "new_addresschangereason",
+    "new_address_change_reason",
+)
+_TEXT_ATTRIBUTE_TYPES = {"string", "memo"}
+_COA_REASON_VALUE = "Lucy-driven address update"
 
-def _get_entity_fields_cached(entity: str) -> set:
+
+def _get_entity_attributes_cached(entity: str) -> List[Dict[str, Any]]:
     import time
     cache = _ENTITY_FIELDS_CACHE.get(entity)
     now = time.time()
-    if cache and (now - cache.get("ts", 0) < _ENTITY_FIELDS_CACHE_TTL):
-        return cache.get("fields", set())
+    if cache and (now - cache.get("ts", 0) < _ENTITY_FIELDS_CACHE_TTL) and "attributes" in cache:
+        return cache.get("attributes", [])
     try:
         metadata = _safe_async_run(get_entity_metadata(entity))
-        fields = set()
-        if isinstance(metadata, dict):
-            for attr in metadata.get("value", []):
-                name = attr.get("LogicalName")
-                if name:
-                    fields.add(name)
-        _ENTITY_FIELDS_CACHE[entity] = {"ts": now, "fields": fields}
+        attributes = metadata.get("value", []) if isinstance(metadata, dict) else []
+        fields = {
+            attr.get("LogicalName")
+            for attr in attributes
+            if isinstance(attr, dict) and attr.get("LogicalName")
+        }
+        _ENTITY_FIELDS_CACHE[entity] = {"ts": now, "fields": fields, "attributes": attributes}
         logger.info(f"✅ Cached {len(fields)} fields for entity {entity}")
-        return fields
+        return attributes
     except Exception as exc:
         logger.warning(f"⚠️ Failed to fetch metadata for {entity}: {exc}")
-        return set()
+        return []
+
+
+def _get_entity_fields_cached(entity: str) -> set:
+    return {
+        attr.get("LogicalName")
+        for attr in _get_entity_attributes_cached(entity)
+        if isinstance(attr, dict) and attr.get("LogicalName")
+    }
+
+
+def _has_address_update(updates: Dict[str, Any]) -> bool:
+    return any(field in _ADDRESS_UPDATE_FIELDS for field in updates)
+
+
+def _build_coa_reason_update(entity: str) -> tuple[Dict[str, Any], Optional[str]]:
+    attributes = _get_entity_attributes_cached(entity)
+    if not attributes:
+        return {}, "Unable to confirm COA reason schema from Dynamics metadata; address update was not submitted."
+
+    by_logical_name = {
+        str(attr.get("LogicalName", "")).lower(): attr
+        for attr in attributes
+        if isinstance(attr, dict) and attr.get("LogicalName")
+    }
+    for candidate in _COA_REASON_FIELD_CANDIDATES:
+        attribute = by_logical_name.get(candidate)
+        if not attribute:
+            continue
+        logical_name = attribute.get("LogicalName")
+        attribute_type = str(attribute.get("AttributeType") or "").lower()
+        if attribute_type in _TEXT_ATTRIBUTE_TYPES:
+            return {logical_name: _COA_REASON_VALUE}, None
+        return {}, (
+            f"COA reason field {logical_name} is {attribute_type or 'unknown'}; "
+            "no confirmed text/choice value is available, so address update was not submitted."
+        )
+
+    return {}, (
+        "No confirmed COA reason field found on new_classmembers; "
+        "address update was not submitted."
+    )
 
 
 def _resolve_update_fields(entity: str, updates: Dict[str, Any]) -> Dict[str, Any]:
@@ -1197,6 +1263,16 @@ def update_member_profile_sync(apex_id: str, field_updates: Dict[str, Any]) -> s
         safe_updates = {k: v for k, v in field_updates.items() if k in allowed_fields}
         # Map to actual Dynamics field names if needed
         safe_updates = _resolve_update_fields("new_classmembers", safe_updates)
+        if _has_address_update(safe_updates):
+            coa_update, coa_error = _build_coa_reason_update("new_classmembers")
+            if coa_error:
+                logger.error("COA reason writeback blocked address update for %s: %s", apex_id, coa_error)
+                return json.dumps({
+                    "success": False,
+                    "error": coa_error,
+                    "attempted_updates": safe_updates
+                })
+            safe_updates.update(coa_update)
 
         if not safe_updates:
             return json.dumps({
@@ -4385,6 +4461,16 @@ async def smart_update_member(apex_id: str, update_request: str) -> Dict[str, An
         field_updates = parse_agentic_update_request(update_request)
         # Map to actual Dynamics field names if needed
         field_updates = _resolve_update_fields("new_classmembers", field_updates)
+        if _has_address_update(field_updates):
+            coa_update, coa_error = _build_coa_reason_update("new_classmembers")
+            if coa_error:
+                logger.error("COA reason writeback blocked smart address update for %s: %s", apex_id, coa_error)
+                return {
+                    "success": False,
+                    "error": coa_error,
+                    "attempted_updates": field_updates
+                }
+            field_updates.update(coa_update)
 
         if not field_updates:
             return {
@@ -4584,6 +4670,9 @@ def find_notice_for_user_sync(apex_id: str) -> str:
 
             def _update_progress(label: str, value: int) -> None:
                 nonlocal progress_message
+                if os.getenv("LUCY_CHAINLIT_NOTICE_PROGRESS", "false").strip().lower() not in {"1", "true", "yes", "on"}:
+                    logger.debug(f"[Lucy] Progress update skipped: {label} ({value}%)")
+                    return
                 try:
                     element = cl.CustomElement(
                         name="ProgressBar",
