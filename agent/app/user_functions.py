@@ -662,7 +662,15 @@ _COA_REASON_FIELD_CANDIDATES = (
     "new_address_change_reason",
 )
 _TEXT_ATTRIBUTE_TYPES = {"string", "memo"}
-_COA_REASON_VALUE = "Lucy-driven address update"
+_CHOICE_ATTRIBUTE_TYPES = {"picklist", "state", "status"}
+_COA_REASON_LABEL = "COA via Lucy"
+_METADATA_LOGICAL_NAME = {
+    "new_classmembers": "new_classmember",
+}
+
+
+def _metadata_logical_name(entity: str) -> str:
+    return _METADATA_LOGICAL_NAME.get(entity, entity)
 
 
 def _get_entity_attributes_cached(entity: str) -> List[Dict[str, Any]]:
@@ -672,7 +680,7 @@ def _get_entity_attributes_cached(entity: str) -> List[Dict[str, Any]]:
     if cache and (now - cache.get("ts", 0) < _ENTITY_FIELDS_CACHE_TTL) and "attributes" in cache:
         return cache.get("attributes", [])
     try:
-        metadata = _safe_async_run(get_entity_metadata(entity))
+        metadata = _safe_async_run(get_entity_metadata(_metadata_logical_name(entity)))
         attributes = metadata.get("value", []) if isinstance(metadata, dict) else []
         fields = {
             attr.get("LogicalName")
@@ -699,6 +707,59 @@ def _has_address_update(updates: Dict[str, Any]) -> bool:
     return any(field in _ADDRESS_UPDATE_FIELDS for field in updates)
 
 
+def _normalized_choice_label(label: Any) -> str:
+    return " ".join(str(label or "").strip().lower().split())
+
+
+def _option_label(option: Dict[str, Any]) -> str:
+    label = option.get("Label") or {}
+    if isinstance(label, dict):
+        localized = label.get("UserLocalizedLabel") or {}
+        if isinstance(localized, dict) and localized.get("Label"):
+            return str(localized["Label"])
+        labels = label.get("LocalizedLabels") or []
+        for localized_label in labels:
+            if isinstance(localized_label, dict) and localized_label.get("Label"):
+                return str(localized_label["Label"])
+    return ""
+
+
+def _find_choice_option_value(attribute: Dict[str, Any], label: str) -> Optional[int]:
+    expected_label = _normalized_choice_label(label)
+    for option_set_key in ("OptionSet", "GlobalOptionSet"):
+        option_set = attribute.get(option_set_key) or {}
+        if not isinstance(option_set, dict):
+            continue
+        for option in option_set.get("Options") or []:
+            if not isinstance(option, dict):
+                continue
+            if _normalized_choice_label(_option_label(option)) == expected_label:
+                return option.get("Value")
+    return None
+
+
+def _get_choice_attribute_metadata(entity: str, logical_name: str) -> Dict[str, Any]:
+    access_token = _safe_async_run(get_access_token())
+    entity_logical_name = _metadata_logical_name(entity)
+    url = (
+        f"{DYNAMICS_CONFIG['resource_url']}/api/data/v9.2/"
+        f"EntityDefinitions(LogicalName='{entity_logical_name}')/"
+        f"Attributes(LogicalName='{logical_name}')/"
+        "Microsoft.Dynamics.CRM.PicklistAttributeMetadata"
+        "?$select=LogicalName,AttributeType"
+        "&$expand=OptionSet($select=Options),GlobalOptionSet($select=Options)"
+    )
+    headers = {
+        "Authorization": f"Bearer {access_token}",
+        "Accept": "application/json",
+        "OData-MaxVersion": "4.0",
+        "OData-Version": "4.0",
+    }
+    response = requests.get(url, headers=headers, timeout=15)
+    response.raise_for_status()
+    return response.json()
+
+
 def _build_coa_reason_update(entity: str) -> tuple[Dict[str, Any], Optional[str]]:
     attributes = _get_entity_attributes_cached(entity)
     if not attributes:
@@ -716,11 +777,24 @@ def _build_coa_reason_update(entity: str) -> tuple[Dict[str, Any], Optional[str]
         logical_name = attribute.get("LogicalName")
         attribute_type = str(attribute.get("AttributeType") or "").lower()
         if attribute_type in _TEXT_ATTRIBUTE_TYPES:
-            return {logical_name: _COA_REASON_VALUE}, None
-        return {}, (
-            f"COA reason field {logical_name} is {attribute_type or 'unknown'}; "
-            "no confirmed text/choice value is available, so address update was not submitted."
-        )
+            return {logical_name: _COA_REASON_LABEL}, None
+        if attribute_type in _CHOICE_ATTRIBUTE_TYPES or attribute.get("OptionSet") or attribute.get("GlobalOptionSet"):
+            option_value = _find_choice_option_value(attribute, _COA_REASON_LABEL)
+            if option_value is None:
+                try:
+                    attribute = _get_choice_attribute_metadata(entity, logical_name)
+                    option_value = _find_choice_option_value(attribute, _COA_REASON_LABEL)
+                except Exception as exc:
+                    return {}, (
+                        f"COA reason field {logical_name} is a choice, but option metadata could not be read: {exc}"
+                    )
+            if option_value is not None:
+                return {logical_name: option_value}, None
+            return {}, (
+                f"COA reason field {logical_name} is a choice, but option "
+                f"{_COA_REASON_LABEL!r} was not found; address update was not submitted."
+            )
+        return {}, f"COA reason field {logical_name} has unsupported type {attribute_type or 'unknown'}."
 
     return {}, (
         "No confirmed COA reason field found on new_classmembers; "
@@ -4670,9 +4744,6 @@ def find_notice_for_user_sync(apex_id: str) -> str:
 
             def _update_progress(label: str, value: int) -> None:
                 nonlocal progress_message
-                if os.getenv("LUCY_CHAINLIT_NOTICE_PROGRESS", "false").strip().lower() not in {"1", "true", "yes", "on"}:
-                    logger.debug(f"[Lucy] Progress update skipped: {label} ({value}%)")
-                    return
                 try:
                     element = cl.CustomElement(
                         name="ProgressBar",
