@@ -745,6 +745,63 @@ Follow-up:
 
 ---
 
+## Hosted Agent gpt-5.2-chat alignment 2026-05-03
+
+- Status: deployed and verified for Hosted v13 chat-model routing.
+- Summary:
+  - Root-caused the model split reported in Foundry: Hosted container env had
+    chat-flavored model settings, but `MODEL_DEPLOYMENT_NAME=gpt-5.2` was still
+    present and wins over `AZURE_AGENT_MODEL` / `AZURE_GPT_MODEL` in Lucy's
+    current startup and Responses code paths.
+  - Created the NCUS Foundry model deployment `gpt-5.2-chat`
+    (`gpt-5.2-chat`, version `2025-12-11`, `GlobalStandard`, capacity `535`)
+    on `agent-lucy-foundry-ncus`.
+  - Published/reconciled the NCUS inner prompt agent onto the chat lane. Live
+    startup telemetry now reports `agent-lucy-prod:6` and model
+    `gpt-5.2-chat`.
+  - Created Hosted Agent version `agent-lucy-hosted-ncus:13` from the same
+    `hosted-pr2-20260503072101-convfix` image, with
+    `MODEL_DEPLOYMENT_NAME`, `AZURE_AGENT_MODEL`, `AZURE_GPT_MODEL`, and
+    `AZURE_SUMMARY_MODEL` aligned to `gpt-5.2-chat`.
+  - Preserved Hosted-only guards:
+    `LUCY_CHAINLIT_ENABLED=false` and
+    `LUCY_DASHBOARD_ROUTES_ENABLED=false`.
+- Files changed:
+  - `TASKS.md`
+  - `agent/hosted_agent/README.md`
+  - `state/refactor-ledger.md`
+- Tests and live verification:
+  - Hosted v13 smoke:
+    `caresp_3f8f163a7d28231200iW6s1z60fta5B9NnfiPgbJc9aS3e4ep7`,
+    `status=completed`, `error=None`, output
+    `Lucy's hosted GPT-5.2 chat is online and responding normally.`
+  - Hosted v13 response retrieval for the same `caresp_...` id returned
+    `status=completed`, `error=None`, and the same output text.
+  - Hosted v13 target evaluation run
+    `evalrun_b03b7e0521e642c6986d3e84e10b65a3` completed with output text
+    `The Lucy-hosted Target Evaluation v13 chat is now online.`,
+    `passed=1`, `failed=0`, `errored=0`.
+  - App Insights KQL shows Hosted request rows for
+    `invoke_agent agent-lucy-hosted-ncus:13` with `success=True`,
+    `gen_ai.agent.name=agent-lucy-hosted-ncus`,
+    `gen_ai.agent.id=agent-lucy-hosted-ncus:13`, and
+    `gen_ai.agent.version=13`.
+  - App Insights dependency rows show the actual model path as
+    `chat gpt-5.2-chat-2025-12-11`, with request/response model dimensions
+    also set to `gpt-5.2-chat-2025-12-11`.
+- Blockers / follow-ups:
+  - Foundry Operate dashboard is still not proven populated. Raw trace,
+    request, dependency, Build traces, and one-off eval evidence are green; the
+    remaining issue is now Operate-specific portal/monitoring-feature wiring or
+    ingestion/display behavior, not the Hosted model lane.
+  - Some Foundry eval usage summaries still display a base `gpt-5.2` label.
+    Treat raw App Insights dependency dimensions as the authoritative model
+    proof for this deployment.
+  - Full notice-auth-PDF-HITL canary is still pending after the observability
+    path is acceptable.
+
+---
+
 ## Completed Plans
 
 _none yet_

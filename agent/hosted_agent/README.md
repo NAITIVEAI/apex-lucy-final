@@ -38,8 +38,9 @@ launch attempt. The current Hosted Agent canary is in North Central US:
 - Project endpoint:
   `https://agent-lucy-foundry-ncus.services.ai.azure.com/api/projects/agent-lucy-prj-ncus`
 - ACR: `agentlucyacrncus.azurecr.io`
-- Model deployment: `gpt-5.2`
-- Hosted Agent: `agent-lucy-hosted-ncus:12`
+- Model deployment: `gpt-5.2-chat`
+- Hosted Agent: `agent-lucy-hosted-ncus:13`
+- Inner prompt agent: `agent-lucy-prod:6`
 - Hosted image:
   `agentlucyacrncus.azurecr.io/agent-lucy-hosted:hosted-pr2-20260503072101-convfix`
 
@@ -67,28 +68,32 @@ Expected smoke result: `completed None` with a short Lucy response.
 
 - App Insights telemetry is landing for Hosted Agent traffic, including the
   outer hosted request and dependencies for `create_agent`,
-  `invoke_agent agent-lucy-prod:1`, `execute_tool`, and the `gpt-5.2` model
-  call.
-- Version 12 response creation and retrieval are both green for Hosted wrapper
+  `invoke_agent agent-lucy-prod:6`, `execute_tool`, and the
+  `gpt-5.2-chat-2025-12-11` model call.
+- Version 13 response creation and retrieval are both green for Hosted wrapper
   response ids. The adapter keeps Hosted `caresp_...` / `conv_...` identifiers
   as Foundry metadata but does not forward them as inner prompt-agent
   conversation state.
-- Version 12 target evaluation completed successfully with output text, model
+- Version 13 target evaluation completed successfully with output text, model
   usage, and `passed=1`, `failed=0`, `errored=0`:
-  `evalrun_df11a3f7b4f3458b8e2d492d45be85b8`.
-- Version 12 telemetry should confirm canonical agent dimensions on hosted request,
+  `evalrun_b03b7e0521e642c6986d3e84e10b65a3`.
+- Version 13 telemetry confirms canonical agent dimensions on hosted request,
   `create_agent`, and `execute_tool` rows:
   `gen_ai.agent.name=agent-lucy-hosted-ncus`,
-  `gen_ai.agent.id=agent-lucy-hosted-ncus:12`, and
-  `gen_ai.agent.version=12`. The stale custom `gen_ai.agents.id=lucy-aca`
+  `gen_ai.agent.id=agent-lucy-hosted-ncus:13`, and
+  `gen_ai.agent.version=13`. The stale custom `gen_ai.agents.id=lucy-aca`
   dimension is no longer emitted by Lucy's custom response loop.
-- Version 12 also carries the explicit AI Search project connection ID and
+- Version 13 also carries the explicit AI Search project connection ID and
   disables Chainlit-only dashboard route registration in the Hosted process.
+- Version 13 aligns `MODEL_DEPLOYMENT_NAME`, `AZURE_AGENT_MODEL`, and
+  `AZURE_GPT_MODEL` to `gpt-5.2-chat`; `MODEL_DEPLOYMENT_NAME` wins in Lucy's
+  code path, so leaving it at base `gpt-5.2` silently routes the inner prompt
+  agent to the wrong model lane.
 - Continuous evaluation is enabled for the inner prompt agent
   `agent-lucy-prod` and produces completed runs.
 - Continuous evaluation rules targeting the outer Hosted Agent
-  `agent-lucy-hosted-ncus` still need a fresh post-v12 run. Historical v10/v11
-  runs failed with `session_not_accessible`; a v12 one-off Hosted target eval
+  `agent-lucy-hosted-ncus` still need a fresh post-v13 run. Historical v10/v11
+  runs failed with `session_not_accessible`; a v13 one-off Hosted target eval
   passed after the adapter stopped forwarding Hosted wrapper ids to the inner
   prompt agent.
 
