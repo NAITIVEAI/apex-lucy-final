@@ -2,7 +2,7 @@
 
 This ledger records every plan from `/plans/` along with its status, summary, files changed, research evidence, tests, results, blockers, and follow-ups. It is the canonical resume point for any new agent session per `AGENTS.md`.
 
-**Source-of-truth hierarchy:** explicit user instruction → `AGENTS.md` → active `/plans/*.md` → `.agents/skills/lucy-spec-implementation/SKILL.md` → existing code patterns.
+**Source-of-truth hierarchy:** explicit user instruction → `AGENTS.md` → `TASKS.md` → active `/plans/*.md` → existing code patterns.
 
 ---
 
@@ -589,22 +589,27 @@ Follow-up:
 - Gateway/APIM route remains the rollback and diagnostics bridge until Hosted
   Agent parity is proven.
 
-**COA reason writeback slice 2026-04-29 — IMPLEMENTED WITH SCHEMA AMBIGUITY GUARD:**
+**COA reason writeback slice 2026-04-29 — IMPLEMENTED WITH LIVE SCHEMA CONFIRMATION:**
 - Triggering instruction: user requested the Lucy COA-reason writeback in the
   address-update path. The expected `/plans/004-coa-audit-writeback.md` file is
-  not present in this repo, and `.agents/skills/lucy-spec-implementation/SKILL.md`
-  is still missing, so the explicit user instruction drove this bounded slice.
+  not present in this repo, so the explicit user instruction drove this bounded
+  slice.
 - Files changed:
   - `agent/app/user_functions.py`
   - `portal/app/user_functions.py`
   - `agent/tests/test_coa_reason_writeback.py`
 - Summary:
   - Added COA reason schema discovery around `new_classmembers` metadata.
-  - Lucy address updates now add the confirmed text COA reason field to the same
-    Dynamics PATCH payload as the address fields.
+  - Lucy address updates now add `COA via Lucy` to the same Dynamics PATCH
+    payload as the address fields.
+  - For Dataverse choice fields, Lucy resolves the stored integer option value
+    from metadata instead of hardcoding a guessed value.
   - Address updates now fail closed before PATCH when the COA reason field is
-    missing, metadata is unavailable, or the matching field is a non-text type
-    without a confirmed stored value.
+    missing, metadata is unavailable, or the `COA via Lucy` option cannot be
+    confirmed.
+  - Live Dataverse metadata confirmed `new_classmembers` maps to logical entity
+    `new_classmember`, `COA Reason` is `new_coareason` (`Picklist`), and
+    `COA via Lucy` stores as `100000005`.
   - Mirrored the behavior in the portal copy so the duplicate address-update
     surface does not drift.
 - Research evidence:
@@ -613,14 +618,11 @@ Follow-up:
     than display labels, so non-text COA fields remain blocked until the stored
     option value is confirmed.
 - Tests run:
-  - `python -m pytest -q agent/tests/test_coa_reason_writeback.py` → 3 passed.
-  - `python -m py_compile agent/app/user_functions.py portal/app/user_functions.py agent/tests/test_coa_reason_writeback.py` → passed.
+  - `python -m pytest -q agent/tests/test_coa_reason_writeback.py`
+  - `python -m py_compile agent/app/user_functions.py portal/app/user_functions.py agent/tests/test_coa_reason_writeback.py`
+  - Live Dataverse metadata query for `new_classmember.new_coareason`.
 - Blockers / ambiguity:
-  - No checked-in schema/constant identifies the exact production COA reason
-    logical name or confirms whether it is text vs choice.
-  - Local environment has no `D365_*` credentials, so live metadata could not be
-    queried from this workspace. Full closure still needs a live metadata check
-    or committed schema constant for the exact field/value.
+  - No live writeback mutation was performed from this workspace.
 
 ---
 

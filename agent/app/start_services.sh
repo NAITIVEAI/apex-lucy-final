@@ -46,12 +46,37 @@ if [ "${LUCY_HTTP_ENABLED:-true}" = "true" ]; then
     HTTP_PID=$!
 fi
 
-# Give background services a moment to start
-sleep 2
+if [ -n "$HTTP_PID" ]; then
+    echo "🔍 Checking FastAPI HTTP wrapper health..."
+    HTTP_HEALTH_URL="http://127.0.0.1:${LUCY_HTTP_PORT}/agent/health"
+    HTTP_READY="false"
+    for _ in $(seq 1 15); do
+        if ! kill -0 "$HTTP_PID" 2>/dev/null; then
+            echo "❌ FastAPI HTTP wrapper exited before becoming healthy."
+            exit 1
+        fi
+        if HTTP_HEALTH_URL="$HTTP_HEALTH_URL" python - <<'PY'
+import os
+import sys
+import urllib.request
 
-if [ -n "$HTTP_PID" ] && ! kill -0 "$HTTP_PID" 2>/dev/null; then
-    echo "❌ FastAPI HTTP wrapper failed to start."
-    exit 1
+try:
+    with urllib.request.urlopen(os.environ["HTTP_HEALTH_URL"], timeout=1) as response:
+        sys.exit(0 if response.status == 200 else 1)
+except Exception:
+    sys.exit(1)
+PY
+        then
+            echo "✅ FastAPI HTTP wrapper is healthy."
+            HTTP_READY="true"
+            break
+        fi
+        sleep 1
+    done
+    if [ "$HTTP_READY" != "true" ]; then
+        echo "❌ FastAPI HTTP wrapper did not become healthy at ${HTTP_HEALTH_URL}."
+        exit 1
+    fi
 fi
 
 if [ "${LUCY_CHAINLIT_ENABLED:-true}" != "true" ]; then

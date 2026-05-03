@@ -52,11 +52,20 @@ class CoaReasonWritebackTests(unittest.TestCase):
             "attributes": list(attributes),
         }
 
-    def test_text_coa_reason_field_is_added_to_member_address_update(self):
+    def test_choice_coa_reason_field_is_added_to_member_address_update(self):
         self._seed_metadata(
             {"LogicalName": "new_address", "AttributeType": "String"},
             {"LogicalName": "new_city", "AttributeType": "String"},
-            {"LogicalName": "new_coareason", "AttributeType": "Memo"},
+            {
+                "LogicalName": "new_coareason",
+                "AttributeType": "Picklist",
+                "OptionSet": {
+                    "Options": [
+                        {"Value": 100000001, "Label": {"UserLocalizedLabel": {"Label": "COA via Email"}}},
+                        {"Value": 100000005, "Label": {"UserLocalizedLabel": {"Label": "COA via Lucy"}}},
+                    ]
+                },
+            },
         )
 
         captured_updates = {}
@@ -64,7 +73,7 @@ class CoaReasonWritebackTests(unittest.TestCase):
         def fake_query(entity, filter_str=None, select=None):
             if select == "new_classmemberid,new_apexid":
                 return json.dumps([{"new_classmemberid": "member-guid", "new_apexid": "A123"}])
-            return json.dumps([{"new_address": "123 Main", "new_coareason": "Lucy-driven address update"}])
+            return json.dumps([{"new_address": "123 Main", "new_coareason": 100000005}])
 
         def fake_update(entity, entity_id, data):
             captured_updates.update(data)
@@ -82,7 +91,18 @@ class CoaReasonWritebackTests(unittest.TestCase):
 
         self.assertTrue(result["success"])
         self.assertEqual(captured_updates["new_address"], "123 Main")
-        self.assertEqual(captured_updates["new_coareason"], "Lucy-driven address update")
+        self.assertEqual(captured_updates["new_coareason"], 100000005)
+
+    def test_text_coa_reason_field_uses_lucy_label(self):
+        self._seed_metadata(
+            {"LogicalName": "new_address", "AttributeType": "String"},
+            {"LogicalName": "new_coareason", "AttributeType": "Memo"},
+        )
+
+        update, error = self.user_functions._build_coa_reason_update("new_classmembers")
+
+        self.assertIsNone(error)
+        self.assertEqual(update, {"new_coareason": "COA via Lucy"})
 
     def test_missing_coa_reason_schema_blocks_address_update(self):
         self._seed_metadata({"LogicalName": "new_address", "AttributeType": "String"})
@@ -99,16 +119,53 @@ class CoaReasonWritebackTests(unittest.TestCase):
         self.assertIn("No confirmed COA reason field", result["error"])
         update_entity.assert_not_called()
 
-    def test_choice_coa_reason_schema_blocks_without_confirmed_option_value(self):
+    def test_choice_coa_reason_schema_reads_option_metadata_when_not_cached(self):
+        self._seed_metadata(
+            {"LogicalName": "new_address", "AttributeType": "String"},
+            {"LogicalName": "new_coareason", "AttributeType": "Picklist"},
+        )
+        choice_metadata = {
+            "LogicalName": "new_coareason",
+            "AttributeType": "Picklist",
+            "OptionSet": {
+                "Options": [
+                    {"Value": 100000010, "Label": {"UserLocalizedLabel": {"Label": "COA via Call"}}},
+                    {"Value": 100000011, "Label": {"UserLocalizedLabel": {"Label": "COA via Lucy"}}},
+                ]
+            },
+        }
+
+        with patch.object(self.user_functions, "_get_choice_attribute_metadata", return_value=choice_metadata):
+            update, error = self.user_functions._build_coa_reason_update("new_classmembers")
+
+        self.assertIsNone(error)
+        self.assertEqual(update, {"new_coareason": 100000011})
+
+    def test_metadata_lookup_uses_classmember_logical_name(self):
+        calls = []
+
+        def fake_metadata(entity):
+            calls.append(entity)
+            return {"value": [{"LogicalName": "new_address", "AttributeType": "String"}]}
+
+        with patch.object(self.user_functions, "get_entity_metadata", side_effect=fake_metadata):
+            self.user_functions._ENTITY_FIELDS_CACHE.clear()
+            fields = self.user_functions._get_entity_fields_cached("new_classmembers")
+
+        self.assertIn("new_address", fields)
+        self.assertEqual(calls, ["new_classmember"])
+
+    def test_choice_coa_reason_schema_blocks_without_lucy_option(self):
         self._seed_metadata(
             {"LogicalName": "new_address", "AttributeType": "String"},
             {"LogicalName": "new_coareason", "AttributeType": "Picklist"},
         )
 
-        update, error = self.user_functions._build_coa_reason_update("new_classmembers")
+        with patch.object(self.user_functions, "_get_choice_attribute_metadata", return_value={}):
+            update, error = self.user_functions._build_coa_reason_update("new_classmembers")
 
         self.assertEqual(update, {})
-        self.assertIn("no confirmed text/choice value", error)
+        self.assertIn("COA via Lucy", error)
 
 
 if __name__ == "__main__":

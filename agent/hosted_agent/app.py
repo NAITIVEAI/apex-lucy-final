@@ -44,6 +44,7 @@ RuntimeFactory = Callable[[], LucyRuntime | Any]
 
 _runtime: LucyRuntime | None = None
 _runtime_lock = asyncio.Lock()
+_TRUE_VALUES = {"1", "true", "yes", "y", "on"}
 
 
 def apply_hosted_env_aliases() -> None:
@@ -93,6 +94,17 @@ def _as_mapping(value: Any) -> dict[str, Any]:
         except Exception:
             pass
     return {}
+
+
+def _strict_bool(value: Any) -> bool:
+    """Parse untrusted Hosted metadata without Python truthiness surprises."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return value == 1
+    if isinstance(value, str):
+        return value.strip().lower() in _TRUE_VALUES
+    return False
 
 
 def _metadata_from_request(request: Any) -> dict[str, Any]:
@@ -184,7 +196,9 @@ async def request_to_lucy_request(request: Any, context: Any) -> LucyRequest:
         previous_response_id=previous_response_id
         or lucy_session_meta.get("previous_response_id"),
         last_eval_final_response_id=lucy_session_meta.get("last_eval_final_response_id"),
-        authenticated=bool(lucy_session_meta.get("authenticated") or metadata.get("authenticated")),
+        authenticated=_strict_bool(
+            lucy_session_meta.get("authenticated", metadata.get("authenticated"))
+        ),
         apex_id=lucy_session_meta.get("apex_id") or metadata.get("apex_id"),
         user_name=lucy_session_meta.get("user_name") or metadata.get("user_name"),
         metadata={
@@ -199,7 +213,7 @@ async def request_to_lucy_request(request: Any, context: Any) -> LucyRequest:
         else metadata.get("pending_notice_request")
     )
     if pending_notice_request is not None:
-        session.metadata["pending_notice_request"] = bool(pending_notice_request)
+        session.metadata["pending_notice_request"] = _strict_bool(pending_notice_request)
     pending_notice_text = lucy_session_meta.get("pending_notice_request_text") or metadata.get(
         "pending_notice_request_text"
     )

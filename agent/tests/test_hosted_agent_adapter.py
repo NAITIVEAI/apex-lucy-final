@@ -89,6 +89,34 @@ class HostedRequestMappingTests(unittest.IsolatedAsyncioTestCase):
             "explain my notice",
         )
 
+    async def test_string_false_does_not_authenticate_session(self):
+        request = _FakeRequest(
+            metadata={
+                "authenticated": "false",
+                "apex_id": "25ONRR2063",
+                "pending_notice_request": "false",
+            }
+        )
+
+        lucy_request = await request_to_lucy_request(request, _FakeContext())
+
+        self.assertFalse(lucy_request.session.authenticated)
+        self.assertFalse(lucy_request.session.metadata["pending_notice_request"])
+
+    async def test_true_like_string_authenticates_session(self):
+        request = _FakeRequest(
+            metadata={
+                "lucy_session": {
+                    "authenticated": "true",
+                    "apex_id": "25ONRR2063",
+                }
+            }
+        )
+
+        lucy_request = await request_to_lucy_request(request, _FakeContext())
+
+        self.assertTrue(lucy_request.session.authenticated)
+
     async def test_falls_back_to_context_session_identity(self):
         lucy_request = await request_to_lucy_request(_FakeRequest(), _FakeContext())
 
