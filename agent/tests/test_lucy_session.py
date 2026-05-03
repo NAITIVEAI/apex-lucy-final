@@ -1,3 +1,5 @@
+import os
+import subprocess
 import sys
 import unittest
 from pathlib import Path
@@ -93,6 +95,31 @@ class LucyErrorHierarchyTests(unittest.TestCase):
         self.assertTrue(issubclass(ToolExecutionError, LucyError))
         self.assertTrue(issubclass(ResponsesAPIError, LucyError))
         self.assertTrue(issubclass(SessionStateError, LucyError))
+
+
+class LucyCorePackageImportTests(unittest.TestCase):
+    def test_package_import_does_not_eagerly_import_runtime(self):
+        script = """
+import lucy_core
+import sys
+
+assert "lucy_core.runtime" not in sys.modules
+assert "lucy_core.responses_loop" not in sys.modules
+assert lucy_core.LucyRuntime.__name__ == "LucyRuntime"
+assert "lucy_core.runtime" in sys.modules
+"""
+        result = subprocess.run(
+            [sys.executable, "-c", script],
+            check=False,
+            cwd=Path(__file__).resolve().parents[2],
+            env={
+                **os.environ,
+                "PYTHONPATH": str(Path(__file__).resolve().parents[2] / "agent" / "app"),
+            },
+            text=True,
+            capture_output=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
 
 
 if __name__ == "__main__":
