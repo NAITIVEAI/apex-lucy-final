@@ -44,7 +44,7 @@ def build_response_payload(
         "conversation": conversation_id,
         "input": user_input,
         "extra_body": {
-            "agent": {
+            "agent_reference": {
                 "type": "agent_reference",
                 "name": agent_name,
                 "version": agent_version,

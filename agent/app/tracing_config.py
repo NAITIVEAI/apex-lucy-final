@@ -106,13 +106,26 @@ class TracingConfig:
     
     def __init__(self):
         self.enabled = TRACING_ENABLED
-        self.service_name = "lucy-ai-agent"
+        self.service_name = os.getenv("OTEL_SERVICE_NAME", "lucy-agent")
         self.service_version = os.getenv("LUCY_VERSION", "1.0.0")
         self.environment = os.getenv("ENVIRONMENT", "development")
         self.azure_monitor_connection_string = None
         self.export_to_console = os.getenv("TRACE_TO_CONSOLE", "false").lower() == "true"
         self.export_to_azure = os.getenv("TRACE_TO_AZURE", "true").lower() == "true"
         self.content_recording_enabled = os.getenv("AZURE_TRACING_GEN_AI_CONTENT_RECORDING_ENABLED", "false").lower() == "true"
+
+    def _resource_attributes(self) -> Dict[str, str]:
+        attributes: Dict[str, str] = {}
+        raw = os.getenv("OTEL_RESOURCE_ATTRIBUTES", "")
+        for item in raw.split(","):
+            if "=" not in item:
+                continue
+            key, value = item.split("=", 1)
+            key = key.strip()
+            if not key:
+                continue
+            attributes[key] = value.strip()
+        return attributes
         
     def initialize(self, project_client=None):
         """Initialize tracing with Azure Monitor and/or console exporters"""
@@ -124,12 +137,14 @@ class TracingConfig:
             
         try:
             # Create resource with service information
-            resource = Resource.create({
+            resource_values = {
                 SERVICE_NAME: self.service_name,
                 SERVICE_VERSION: self.service_version,
                 "environment": self.environment,
                 "lucy.instance.id": os.getenv("WEBSITE_INSTANCE_ID", "local"),
-            })
+            }
+            resource_values.update(self._resource_attributes())
+            resource = Resource.create(resource_values)
             
             # Initialize tracer provider
             tracer_provider = TracerProvider(resource=resource)

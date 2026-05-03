@@ -70,7 +70,7 @@ class FoundryV2RuntimeTests(unittest.TestCase):
         self.assertEqual(payload["input"], "hello")
         self.assertEqual(
             payload["extra_body"],
-            {"agent": {"type": "agent_reference", "name": "lucy", "version": "1"}},
+            {"agent_reference": {"type": "agent_reference", "name": "lucy", "version": "1"}},
         )
 
     def test_startup_snapshot_reflects_env(self):
