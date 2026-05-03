@@ -19,6 +19,10 @@ DEFAULT_ENV_KEYS = (
     "AZURE_CLIENT_ID",
     "AZURE_SEARCH_ENDPOINT",
     "AZURE_SEARCH_INDEX",
+    "AZURE_SEARCH_INDEX_NAME",
+    "AI_SEARCH_INDEX_NAME",
+    "AI_SEARCH_PROJECT_CONNECTION_ID",
+    "AI_SEARCH_PROJECT_CONNECTION_NAME",
     "AZURE_STORAGE_ACCOUNT",
     "AZURE_STORAGE_CONNECTION_STRING",
     "DYNAMICS_BASE_URL",
@@ -62,6 +66,11 @@ def _env_mapping(extra_keys: list[str], *, agent_name: str | None = None) -> dic
         hosted_key = _hosted_env_name(key)
         if value and hosted_key:
             env[hosted_key] = value
+    legacy_search_index = os.getenv("AZURE_SEARCH_INDEX")
+    if legacy_search_index and not (
+        env.get("AI_SEARCH_INDEX_NAME") or env.get("AZURE_SEARCH_INDEX_NAME")
+    ):
+        env["AI_SEARCH_INDEX_NAME"] = legacy_search_index
     if agent_name:
         env["LUCY_OTEL_AGENT_ID"] = os.getenv("LUCY_HOSTED_OTEL_AGENT_ID", agent_name)
     env.setdefault("AZURE_TRACING_GEN_AI_CONTENT_RECORDING_ENABLED", "false")
