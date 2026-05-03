@@ -27,6 +27,12 @@ echo "🏥 Starting health check server on port 8080..."
 python health_server.py &
 HEALTH_PID=$!
 
+cleanup() {
+    kill "$HEALTH_PID" 2>/dev/null || true
+    [ -n "${HTTP_PID:-}" ] && kill "$HTTP_PID" 2>/dev/null || true
+}
+trap cleanup EXIT
+
 # Optionally start the FastAPI HTTP wrapper for Foundry AI Gateway registration.
 # Disabled with LUCY_HTTP_ENABLED=false (e.g. for emergency rollback). Default on.
 HTTP_PID=""
@@ -43,10 +49,21 @@ fi
 # Give background services a moment to start
 sleep 2
 
+if [ -n "$HTTP_PID" ] && ! kill -0 "$HTTP_PID" 2>/dev/null; then
+    echo "❌ FastAPI HTTP wrapper failed to start."
+    exit 1
+fi
+
+if [ "${LUCY_CHAINLIT_ENABLED:-true}" != "true" ]; then
+    if [ -z "$HTTP_PID" ]; then
+        echo "❌ LUCY_CHAINLIT_ENABLED=false requires LUCY_HTTP_ENABLED=true."
+        exit 1
+    fi
+    echo "🌐 Chainlit disabled; running gateway HTTP wrapper as foreground service."
+    wait "$HTTP_PID"
+    exit $?
+fi
+
 # Start Chainlit app (runs in foreground)
 echo "💬 Starting Chainlit app on port 8000..."
 chainlit run apex.py --port 8000
-
-# If Chainlit exits, kill background services
-kill "$HEALTH_PID" 2>/dev/null || true
-[ -n "$HTTP_PID" ] && kill "$HTTP_PID" 2>/dev/null || true

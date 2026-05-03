@@ -54,7 +54,13 @@ def parse_project_scope_from_connection_id(connection_id: str) -> FoundryProject
 
 
 def get_application_name(agent_name: str, explicit_name: Optional[str] = None) -> str:
-    chosen = (explicit_name or os.getenv("FOUNDRY_APPLICATION_NAME") or agent_name or "").strip()
+    chosen = (
+        explicit_name
+        or os.getenv("LUCY_FOUNDRY_APPLICATION_NAME")
+        or os.getenv("FOUNDRY_APPLICATION_NAME")
+        or agent_name
+        or ""
+    ).strip()
     if not chosen:
         raise ValueError("Foundry application name is required")
     return chosen

@@ -16,6 +16,7 @@ from foundry_init import (
     _normalize_search_index_name,
     fallback_publication_state,
     get_agent_name,
+    get_agent_reasoning_effort,
     get_application_name_for_agent,
     get_model_deployment_name,
     get_search_connection_id_env,
@@ -57,6 +58,27 @@ class EnvReaderTests(unittest.TestCase):
             os.environ.pop("AZURE_AGENT_MODEL", None)
             os.environ["AZURE_GPT_MODEL"] = "third"
             self.assertEqual(get_model_deployment_name(), "third")
+
+    def test_get_agent_reasoning_effort_defaults_gpt5_to_medium(self):
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("AZURE_AGENT_REASONING_EFFORT", None)
+            os.environ.pop("AZURE_RESPONSES_REASONING_EFFORT", None)
+            self.assertEqual(get_agent_reasoning_effort("gpt-5.2-chat"), "medium")
+
+    def test_get_agent_reasoning_effort_keeps_gpt52_medium_when_explicit_low(self):
+        with patch.dict(
+            os.environ,
+            {
+                "AZURE_AGENT_REASONING_EFFORT": "low",
+                "AZURE_RESPONSES_REASONING_EFFORT": "low",
+            },
+            clear=False,
+        ):
+            self.assertEqual(get_agent_reasoning_effort("gpt-5.2-chat"), "medium")
+
+    def test_get_agent_reasoning_effort_uses_explicit_for_non_gpt52(self):
+        with patch.dict(os.environ, {"AZURE_AGENT_REASONING_EFFORT": "high"}, clear=False):
+            self.assertEqual(get_agent_reasoning_effort("gpt-5"), "high")
 
     def test_get_application_name_for_agent_uses_agent_name(self):
         # foundry_publish.get_application_name(agent_name) — exact format is

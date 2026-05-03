@@ -2722,6 +2722,10 @@ def _build_authenticated_state_items() -> List[Dict[str, Any]]:
         authenticated=bool(cl.user_session.get("authenticated")),
         apex_id=cl.user_session.get("apex_id"),
         user_name=cl.user_session.get("user_name"),
+        metadata={
+            "pending_notice_request": bool(cl.user_session.get("pending_notice_request")),
+            "pending_notice_request_text": cl.user_session.get("pending_notice_request_text") or "",
+        },
     )
     return _lucy_build_authenticated_state_items(session)
 
@@ -4212,6 +4216,14 @@ async def check_for_agent_presence(thread_id: str) -> bool:
 # Add custom dashboard routes to Chainlit app
 def setup_dashboard_routes():
     """Add dashboard routes to the main Chainlit FastAPI app"""
+    dashboard_enabled = os.getenv(
+        "LUCY_DASHBOARD_ROUTES_ENABLED",
+        os.getenv("LUCY_CHAINLIT_ENABLED", "true"),
+    ).lower() not in {"0", "false", "no", "off"}
+    if not dashboard_enabled:
+        logger.info("ℹ️ Dashboard routes disabled for this process")
+        return
+
     try:
         from fastapi import Request
         from fastapi.responses import HTMLResponse, JSONResponse
@@ -4597,8 +4609,10 @@ async def start_chat():
             except Exception as e:
                 logger.warning(f"Network connectivity check failed: {e}")
 
-        # Generate session ID for tracing
-        session_id = str(uuid.uuid4())
+        # Generate session ID for tracing. Chainlit may call on_chat_start again
+        # after a websocket reconnect; preserve existing turn/thread state when
+        # the browser is still in the same logical chat.
+        session_id = cl.user_session.get("session_id") or str(uuid.uuid4())
         cl.user_session.set("session_id", session_id)
 
         use_v2 = use_foundry_v2()
@@ -4623,9 +4637,14 @@ async def start_chat():
 
             cl.user_session.set("agent_name", agent_name)
             cl.user_session.set("agent_version", agent_version)
-            cl.user_session.set("conversation_id", None)
-            cl.user_session.set("previous_response_id", None)
-            logger.info(f"✅ Foundry v2 chat session initialized: {agent_name}:{agent_version}")
+            logger.info(
+                "✅ Foundry v2 chat session initialized: %s:%s "
+                "(conversation_id=%s previous_response_id_present=%s)",
+                agent_name,
+                agent_version,
+                cl.user_session.get("conversation_id"),
+                bool(cl.user_session.get("previous_response_id")),
+            )
             return
 
         # Ensure we have a valid persistent agent
@@ -4682,6 +4701,7 @@ async def main(message: cl.Message):
         # Only set when we detect notice intent; otherwise keep existing value.
         if _is_notice_intent(message.content):
             cl.user_session.set("pending_notice_request", True)
+            cl.user_session.set("pending_notice_request_text", message.content)
             logger.info("📌 Notice intent detected; will attempt notice retrieval after auth.")
 
         # Start message processing span
@@ -4998,15 +5018,21 @@ async def main(message: cl.Message):
 
                     if not pdf_tool_outputs and cl.user_session.get("pending_notice_request"):
                         apex_id = cl.user_session.get("apex_id")
+                        notice_request_satisfied = False
                         if apex_id:
                             try:
                                 from user_functions import find_notice_for_user_sync
                                 forced_notice_output = find_notice_for_user_sync(str(apex_id))
                                 if forced_notice_output:
                                     pdf_tool_outputs.append(str(forced_notice_output))
+                                    notice_request_satisfied = True
                             except Exception as notice_err:
                                 logger.warning(f"⚠️ Forced notice retrieval failed: {notice_err}")
-                        cl.user_session.set("pending_notice_request", None)
+                        if notice_request_satisfied:
+                            cl.user_session.set("pending_notice_request", None)
+                            cl.user_session.set("pending_notice_request_text", None)
+                        else:
+                            logger.info("📌 Keeping pending notice request for the next turn.")
 
                     if pdf_tool_outputs and not cl.user_session.get("pending_pdf"):
                         for raw_output in pdf_tool_outputs:
@@ -5276,16 +5302,22 @@ async def main(message: cl.Message):
                     # Fallback: force notice retrieval if user asked for notice and tool didn't run
                     if not pdf_tool_outputs and cl.user_session.get("pending_notice_request"):
                         apex_id = cl.user_session.get("apex_id")
+                        notice_request_satisfied = False
                         if apex_id:
                             try:
                                 from user_functions import find_notice_for_user_sync
                                 forced_notice_output = find_notice_for_user_sync(str(apex_id))
                                 if forced_notice_output:
                                     pdf_tool_outputs.append(str(forced_notice_output))
+                                    notice_request_satisfied = True
                                     logger.info("✅ Forced notice retrieval after missing tool call")
                             except Exception as notice_err:
                                 logger.warning(f"⚠️ Forced notice retrieval failed: {notice_err}")
-                        cl.user_session.set("pending_notice_request", None)
+                        if notice_request_satisfied:
+                            cl.user_session.set("pending_notice_request", None)
+                            cl.user_session.set("pending_notice_request_text", None)
+                        else:
+                            logger.info("📌 Keeping pending notice request for the next turn.")
     
                 # Get the latest messages from the thread with retry logic
                 @retry(

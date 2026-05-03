@@ -7,24 +7,29 @@ logger = logging.getLogger("FoundryV2")
 
 try:
     from azure.ai.projects.models import (
-        AzureAISearchAgentTool,
         AzureAISearchToolResource,
         AISearchIndexResource,
         AzureAISearchQueryType,
         FunctionTool,
         PromptAgentDefinition,
+        Reasoning,
     )
+    try:
+        from azure.ai.projects.models import AzureAISearchAgentTool as _AzureAISearchTool
+    except ImportError:
+        from azure.ai.projects.models import AzureAISearchTool as _AzureAISearchTool
     AZURE_PROJECTS_AVAILABLE = True
     _IMPORT_ERROR: Optional[Exception] = None
 except Exception as exc:  # pragma: no cover - environment dependent
     AZURE_PROJECTS_AVAILABLE = False
     _IMPORT_ERROR = exc
-    AzureAISearchAgentTool = None  # type: ignore[assignment]
+    _AzureAISearchTool = None  # type: ignore[assignment]
     AzureAISearchToolResource = None  # type: ignore[assignment]
     AISearchIndexResource = None  # type: ignore[assignment]
     AzureAISearchQueryType = None  # type: ignore[assignment]
     FunctionTool = None  # type: ignore[assignment]
     PromptAgentDefinition = None  # type: ignore[assignment]
+    Reasoning = None  # type: ignore[assignment]
 
 _QUERY_MAP = {
     "simple": "SIMPLE",
@@ -76,7 +81,7 @@ def build_ai_search_tool(
     if filter:
         index_resource.filter = filter
 
-    return AzureAISearchAgentTool(
+    return _AzureAISearchTool(
         azure_ai_search=AzureAISearchToolResource(indexes=[index_resource])
     )
 
@@ -162,20 +167,30 @@ def build_function_tools(functions: list[Callable[..., Any]]) -> list:
     return tools
 
 
-def build_prompt_agent_definition(model: str, instructions: str, tools: list):
+def build_prompt_agent_definition(
+    model: str,
+    instructions: str,
+    tools: list,
+    reasoning_effort: Optional[str] = None,
+):
     if not AZURE_PROJECTS_AVAILABLE:
         raise RuntimeError("Azure AI Projects SDK not available") from _IMPORT_ERROR
 
-    return PromptAgentDefinition(
-        model=model,
-        instructions=instructions,
-        tools=tools,
-    )
+    kwargs = {
+        "model": model,
+        "instructions": instructions,
+        "tools": tools,
+    }
+    if reasoning_effort:
+        if Reasoning is None:
+            raise RuntimeError("Reasoning model not available in Azure AI Projects SDK")
+        kwargs["reasoning"] = Reasoning(effort=reasoning_effort)
+    return PromptAgentDefinition(**kwargs)
 
 
 def build_agent_reference(agent_name: str, agent_version: str):
     return {
-        "agent": {
+        "agent_reference": {
             "type": "agent_reference",
             "name": agent_name,
             "version": agent_version,

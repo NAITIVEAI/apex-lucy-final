@@ -8,6 +8,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "agent" / "app"))
 
 from lucy_core.responses_loop import (
+    _apply_request_reasoning,
     build_authenticated_state_items,
     execute_v2_tool_call,
     extract_v2_function_calls,
@@ -94,6 +95,34 @@ class BuildAuthenticatedStateItemsTests(unittest.TestCase):
         self.assertEqual(len(items), 1)
         # The literal string "None" must NOT leak into the prompt
         self.assertNotIn("None", items[0]["content"])
+
+    def test_pending_notice_intent_is_injected_before_auth(self):
+        s = LucySession(
+            session_id="x",
+            authenticated=False,
+            metadata={
+                "pending_notice_request": True,
+                "pending_notice_request_text": "Could you explain my class action notice to me?",
+            },
+        )
+        items = build_authenticated_state_items(s)
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0]["role"], "system")
+        self.assertIn("already asked Lucy", items[0]["content"])
+        self.assertIn("explain my class action notice", items[0]["content"])
+
+    def test_pending_notice_and_authenticated_state_are_both_injected(self):
+        s = LucySession(
+            session_id="x",
+            authenticated=True,
+            apex_id="A123",
+            user_name="Jane",
+            metadata={"pending_notice_request": True},
+        )
+        items = build_authenticated_state_items(s)
+        self.assertEqual(len(items), 2)
+        self.assertIn("notice", items[0]["content"])
+        self.assertIn("A123", items[1]["content"])
 
 
 class ExtractV2FunctionCallsTests(unittest.TestCase):
@@ -287,6 +316,66 @@ class RunResponseV2Tests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(session.previous_response_id, "r-1")
         self.assertEqual(session.last_eval_final_response_id, "r-1")
 
+    async def test_agent_reference_suppresses_explicit_reasoning_effort(self):
+        """Gateway agent_reference calls must not inherit model-specific reasoning settings."""
+        mock_client = _MockOpenAIClient([
+            _MockResponse(response_id="r-1", output_text="hello back"),
+        ])
+        session = LucySession(session_id="s-1")
+        with patch.dict(
+            os.environ,
+            {
+                "AZURE_RESPONSES_MAX_OUTPUT_TOKENS": "",
+                "AZURE_RESPONSES_REASONING_EFFORT": "low",
+                "AZURE_RESPONSES_STORE": "",
+                "AZURE_RESPONSES_MAX_TOOL_LOOPS": "6",
+            },
+            clear=False,
+        ):
+            await run_response_v2(
+                user_text="hi",
+                session=session,
+                openai_client=mock_client,
+                agent_name="lucy",
+                agent_version="4",
+                function_registry={},
+            )
+
+        self.assertIn("agent_reference", mock_client.create_calls[0]["extra_body"])
+        self.assertNotIn("reasoning", mock_client.create_calls[0])
+
+    def test_gpt52_request_reasoning_low_is_suppressed_without_agent_reference(self):
+        payload = {"input": "hello"}
+        with patch.dict(
+            os.environ,
+            {
+                "MODEL_DEPLOYMENT_NAME": "gpt-5.2-chat",
+                "AZURE_AGENT_MODEL": "",
+                "AZURE_GPT_MODEL": "",
+                "AZURE_RESPONSES_REASONING_EFFORT": "low",
+            },
+            clear=False,
+        ):
+            _apply_request_reasoning(payload)
+
+        self.assertNotIn("reasoning", payload)
+
+    def test_non_gpt52_request_reasoning_uses_explicit_env(self):
+        payload = {"input": "hello"}
+        with patch.dict(
+            os.environ,
+            {
+                "MODEL_DEPLOYMENT_NAME": "gpt-5",
+                "AZURE_AGENT_MODEL": "",
+                "AZURE_GPT_MODEL": "",
+                "AZURE_RESPONSES_REASONING_EFFORT": "low",
+            },
+            clear=False,
+        ):
+            _apply_request_reasoning(payload)
+
+        self.assertEqual(payload["reasoning"], {"effort": "low"})
+
     async def test_one_tool_call_then_final(self):
         """First response triggers a function call; tool runs; second response is final text."""
         executed_args = {}
@@ -320,6 +409,36 @@ class RunResponseV2Tests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(session.previous_response_id, "r-2")
         # Two API calls: initial + tool follow-up
         self.assertEqual(len(mock_client.create_calls), 2)
+
+    async def test_async_tool_executes_inside_live_response_loop(self):
+        """Async registered tools must work in the already-running event loop."""
+        async def async_tool(x):
+            return {"x": x, "async": True}
+
+        mock_client = _MockOpenAIClient([
+            _MockResponse(
+                response_id="r-1",
+                output=[_function_call_item("async_tool", '{"x": 7}', "call-async")],
+            ),
+            _MockResponse(response_id="r-2", output_text="done"),
+        ])
+        session = LucySession(session_id="s-1")
+        with self._clean_env():
+            result = await run_response_v2(
+                user_text="run async",
+                session=session,
+                openai_client=mock_client,
+                agent_name="lucy",
+                agent_version="4",
+                function_registry={"async_tool": async_tool},
+            )
+        self.assertEqual(result["text"], "done")
+        self.assertEqual(len(result["tool_outputs"]), 1)
+        self.assertEqual(result["tool_outputs"][0]["name"], "async_tool")
+        self.assertEqual(
+            json.loads(result["tool_outputs"][0]["output"]),
+            {"x": 7, "async": True},
+        )
 
     async def test_max_tool_loops_bails(self):
         """When responses keep emitting function calls, the loop bails after the configured max."""

@@ -37,23 +37,98 @@ from response_config import should_include_max_output_tokens
 # tab filters on (gen_ai.agents.id). When the OTel SDK isn't initialized, the
 # tracer returns a no-op span — safe in tests and dev environments.
 from opentelemetry import trace as _otel_trace
+from opentelemetry.trace import Status, StatusCode
 
 _tracer = _otel_trace.get_tracer("lucy_core.responses_loop")
 
 logger = logging.getLogger(__name__)
 
 
+def _get_model_deployment_name() -> str:
+    return (
+        os.getenv("MODEL_DEPLOYMENT_NAME")
+        or os.getenv("AZURE_AGENT_MODEL")
+        or os.getenv("AZURE_GPT_MODEL")
+        or ""
+    ).strip()
+
+
+def _uses_agent_reference(payload: dict[str, Any]) -> bool:
+    if "agent_reference" in payload or "agent" in payload:
+        return True
+    extra_body = payload.get("extra_body")
+    return isinstance(extra_body, dict) and (
+        "agent_reference" in extra_body or "agent" in extra_body
+    )
+
+
+def _apply_request_reasoning(payload: dict[str, Any]) -> None:
+    reasoning_effort = os.getenv("AZURE_RESPONSES_REASONING_EFFORT", "").strip().lower()
+    model = _get_model_deployment_name().lower()
+
+    if _uses_agent_reference(payload):
+        payload.pop("reasoning", None)
+        return
+
+    if model.startswith("gpt-5.2") and reasoning_effort and reasoning_effort != "medium":
+        logger.warning(
+            "Ignoring unsupported request reasoning effort %s for %s; using SDK default",
+            reasoning_effort,
+            model,
+        )
+        payload.pop("reasoning", None)
+        return
+
+    if reasoning_effort:
+        payload["reasoning"] = {"effort": reasoning_effort}
+
+
+def _truncate_span_value(value: Any, *, limit: int = 2048) -> str:
+    """Keep span attributes bounded; Application Insights rejects huge values."""
+    text = value if isinstance(value, str) else str(value)
+    if len(text) <= limit:
+        return text
+    return text[: limit - 3] + "..."
+
+
+def _content_recording_enabled() -> bool:
+    return (
+        os.getenv("AZURE_TRACING_GEN_AI_CONTENT_RECORDING_ENABLED", "false").lower()
+        in {"1", "true", "yes", "on"}
+    )
+
+
 def build_authenticated_state_items(session: LucySession) -> list[dict[str, Any]]:
-    """Inject authenticated state into Responses input to avoid re-auth loops.
+    """Inject session state into Responses input to avoid context drops.
 
     Returns a (possibly empty) list of system messages to be prepended to the
-    user's input when the session has a verified Apex ID.
+    user's input. This includes pending intent captured before authentication
+    and, when available, verified Apex ID state.
     """
     items: list[dict[str, Any]] = []
-    if not session.authenticated:
+
+    pending_notice = session.metadata.get("pending_notice_request")
+    if str(pending_notice).strip().lower() in {"1", "true", "yes", "on"}:
+        pending_text = str(session.metadata.get("pending_notice_request_text") or "").strip()
+        content = (
+            "The user already asked Lucy to retrieve and explain their class action notice. "
+            "If this turn authenticates the user successfully, continue that original notice "
+            "request immediately. Do not reset to a generic greeting or ask how you can help. "
+            "Use the authenticated Apex ID to retrieve the notice."
+        )
+        if pending_text:
+            content += f" Original user request: {pending_text}"
+        items.append(
+            {
+                "type": "message",
+                "role": "system",
+                "content": content,
+            }
+        )
+
+    if not session.authenticated or not session.apex_id:
         return items
-    if not session.apex_id:
-        return items
+
     user_name = session.user_name or ""
     content = (
         "User is already authenticated. "
@@ -150,6 +225,47 @@ def execute_v2_tool_call(
         return json.dumps({"result": str(result)})
 
 
+async def execute_v2_tool_call_async(
+    name: str,
+    arguments: str,
+    function_registry: dict[str, Any],
+) -> str:
+    """Async-safe variant of execute_v2_tool_call for the live Responses loop."""
+    func = function_registry.get(name)
+    if func is None:
+        logger.warning("⚠️ V2 tool call requested unknown function: %s", name)
+        return json.dumps({"error": f"Unknown tool: {name}"})
+
+    try:
+        payload = json.loads(arguments) if arguments else {}
+    except Exception:
+        payload = {}
+
+    if not isinstance(payload, dict):
+        payload = {}
+
+    try:
+        sig = inspect.signature(func)
+        allowed = {k: v for k, v in payload.items() if k in sig.parameters}
+    except Exception:
+        allowed = payload
+
+    try:
+        result = func(**allowed)
+        if inspect.isawaitable(result):
+            result = await result
+    except Exception as exc:
+        logger.error("❌ Tool execution failed for %s: %s", name, exc, exc_info=True)
+        return json.dumps({"error": str(exc)})
+
+    if isinstance(result, str):
+        return result
+    try:
+        return json.dumps(result)
+    except Exception:
+        return json.dumps({"result": str(result)})
+
+
 async def run_response_v2(
     user_text: str,
     session: LucySession,
@@ -171,8 +287,8 @@ async def run_response_v2(
     before calling — this function does not initialize the Foundry client.
 
     Emits an OpenTelemetry span named "create_agent" with GenAI semantic-
-    convention attributes (`operation`, `gen_ai.agents.id`, `gen_ai.system`,
-    `gen_ai.request.model`). Foundry's Monitor tab filters by `gen_ai.agents.id`.
+    convention attributes (`operation`, `gen_ai.agent.id`, `gen_ai.agent.name`,
+    `gen_ai.system`, `gen_ai.request.model`).
     """
     otel_agent_id = os.getenv("LUCY_OTEL_AGENT_ID", "lucy-aca")
     with _tracer.start_as_current_span(
@@ -180,22 +296,51 @@ async def run_response_v2(
         attributes={
             "operation": "create_agent",
             "gen_ai.operation.name": "create_agent",
-            "gen_ai.agents.id": otel_agent_id,
-            "gen_ai.agents.name": otel_agent_id,
+            "gen_ai.agent.id": otel_agent_id,
+            "gen_ai.agent.name": otel_agent_id,
             "gen_ai.system": "azure.ai.foundry",
             "gen_ai.request.model": agent_name,
             "lucy.session.id": session.session_id,
             "lucy.conversation.id": session.conversation_id or "",
         },
-    ):
-        return await _run_response_v2_impl(
-            user_text=user_text,
-            session=session,
-            openai_client=openai_client,
-            agent_name=agent_name,
-            agent_version=agent_version,
-            function_registry=function_registry,
-        )
+    ) as span:
+        if _content_recording_enabled():
+            span.set_attribute("eval.user_input", _truncate_span_value(user_text))
+        try:
+            result = await _run_response_v2_impl(
+                user_text=user_text,
+                session=session,
+                openai_client=openai_client,
+                agent_name=agent_name,
+                agent_version=agent_version,
+                function_registry=function_registry,
+            )
+            span.set_attribute("response_length", len(result.get("text", "")))
+            span.set_attribute("tools_used", json.dumps([
+                item.get("name", "") for item in result.get("tool_outputs", [])
+            ]))
+            if session.last_eval_final_response_id:
+                span.set_attribute(
+                    "lucy.eval.final_response_id",
+                    session.last_eval_final_response_id,
+                )
+            if _content_recording_enabled():
+                span.set_attribute(
+                    "eval.agent_response",
+                    _truncate_span_value(result.get("text", "")),
+                )
+                span.set_attribute(
+                    "eval.tools_used",
+                    _truncate_span_value(result.get("tool_outputs", [])),
+                )
+            span.set_status(Status(StatusCode.OK))
+            return result
+        except Exception as exc:
+            span.set_attribute("error.type", type(exc).__name__)
+            span.set_attribute("error.message", _truncate_span_value(str(exc)))
+            span.set_status(Status(StatusCode.ERROR, str(exc)))
+            span.record_exception(exc)
+            raise
 
 
 async def _run_response_v2_impl(
@@ -286,12 +431,7 @@ async def _run_response_v2_impl(
     if max_output_tokens is not None:
         payload["max_output_tokens"] = max_output_tokens
 
-    extra_body = payload.get("extra_body")
-    uses_agent_reference = isinstance(extra_body, dict) and "agent" in extra_body
-
-    reasoning_effort = os.getenv("AZURE_RESPONSES_REASONING_EFFORT")
-    if reasoning_effort and not uses_agent_reference:
-        payload["reasoning"] = {"effort": reasoning_effort}
+    _apply_request_reasoning(payload)
 
     store = os.getenv("AZURE_RESPONSES_STORE")
     if store:
@@ -344,8 +484,23 @@ async def _run_response_v2_impl(
                     "gen_ai.tool.name": name,
                     "gen_ai.tool.call.id": call_id,
                 },
-            ):
-                output = execute_v2_tool_call(name, arguments, function_registry)
+            ) as span:
+                if _content_recording_enabled():
+                    span.set_attribute(
+                        "gen_ai.tool.call.arguments",
+                        _truncate_span_value(arguments),
+                    )
+                output = await execute_v2_tool_call_async(
+                    name,
+                    arguments,
+                    function_registry,
+                )
+                span.set_attribute("tool_result_size", len(str(output)))
+                if _content_recording_enabled():
+                    span.set_attribute(
+                        "gen_ai.tool.call.result",
+                        _truncate_span_value(output),
+                    )
             tool_outputs.append(
                 {
                     "name": name,

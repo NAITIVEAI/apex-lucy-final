@@ -1,6 +1,6 @@
 chainlit==2.9.5
 python-dotenv
-azure-ai-projects==2.0.0b3
+azure-ai-projects>=2.0.0
 azure-search-documents
 azure-storage-blob
 azure-ai-agents~=1.2.0b2
@@ -14,6 +14,11 @@ aiohttp
 PyPDF2
 # Simplified OpenTelemetry setup - only what's needed
 azure-monitor-opentelemetry
+azure-core-tracing-opentelemetry
+opentelemetry-api>=1.21.0
+opentelemetry-sdk>=1.21.0
+opentelemetry-instrumentation-requests>=0.42b0
+azure-ai-evaluation
 # azure-monitor-opentelemetry will pull in the correct versions of:
 # - opentelemetry-api
 # - opentelemetry-sdk
