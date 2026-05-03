@@ -586,6 +586,54 @@ Follow-up:
   - Verified revision `agent-lucy-eus2--0000066` is latest ready, Chainlit
     returns HTML on the public root, and startup logs show Foundry init plus
     HTTP wrapper readiness on port `8002`.
+- PR2 Azure deployment 2026-05-03:
+  - Deployment source was PR2 head `62685c9250e5fd23e180f44931a22cf612666858`
+    from `/Users/chris/ai/Apex-Lucy-Final-pr2`; only deployment evidence was
+    appended after the live rollout.
+  - Built/pushed EUS2 app image
+    `agentlucyacreus2.azurecr.io/agent-lucy-eus2:codex-pr2-20260503055908`
+    (`sha256:2a80ee07e26f097141fe68ee4e6ceb983d74082ea2c7fa602770f0e2c247f32a`).
+  - Updated `agent-lucy-eus2` to revision `agent-lucy-eus2--0000069`;
+    revision list showed `active=True`, `traffic=100`, `health=Healthy`,
+    `replicas=1`.
+  - Updated `agent-lucy-gateway-eus2` to revision
+    `agent-lucy-gateway-eus2--0000014`; revision list showed
+    `active=True`, `traffic=100`, `health=Healthy`, `replicas=1`.
+  - Public EUS2 checks passed: member root returned HTTP `200`; gateway
+    `/health/gateway` returned HTTP `200` with `status=healthy`,
+    `gateway_connected=true`, `runtime_initialized=true`,
+    `project_endpoint_configured=true`, `project_probe.ok=true`, and
+    `agent_url_path=/agent/respond`.
+  - Gateway authenticated POST smoke passed with HTTP `200`, response text
+    `Lucy gateway is online.`, `tool_calls=1`, and no errors. Gateway startup
+    logs showed the PR2 health gate waiting for `/agent/health`, then
+    `FastAPI HTTP wrapper is healthy`, then foreground wrapper startup.
+  - Built/pushed NCUS Hosted image
+    `agentlucyacrncus.azurecr.io/agent-lucy-hosted:hosted-pr2-20260503055915`
+    (`sha256:4e2e6f0e65b5d1dafc8c1166851fbd77c2d5ae72cfd2da73e1a01483b95bd3b1`).
+  - Created Hosted Agent version `agent-lucy-hosted-ncus:11`; SDK check
+    confirmed `status=active`.
+  - Hosted v11 SDK smokes completed with `error=None` and short online
+    responses:
+    `caresp_36944afbd2e3a5a1000i4GSPf9Ct8QSDyEGiAJbCX2oerOXBmk`,
+    `caresp_052b113fdb96380100dpKxIwnhoSF9LvwN5zXNMiRwp8SZOWhR`,
+    `caresp_e1d808e148f22c7000sKPjf2ZnlMdMMxGbOoQTZOC45llnlCKl`.
+  - App Insights KQL against `agent-lucy-appins-eus2` confirmed fresh
+    `requests` rows for `invoke_agent agent-lucy-hosted-ncus:11` with
+    `success=True`, `resultCode=0`, `gen_ai.agent.name=agent-lucy-hosted-ncus`,
+    `gen_ai.agent.version=11`, and response id dimensions matching the Hosted
+    smoke responses above.
+  - App Insights `dependencies` rows confirmed NCUS inner prompt-agent
+    execution via `agent-lucy-prod:3`, model dependency
+    `chat gpt-5.2-2025-12-11`, `success=True`, `resultCode=0`, and project id
+    `/subscriptions/22f9f915-587f-4a9a-acff-69b061ef48e1/resourceGroups/agent-lucy-ncus/providers/Microsoft.CognitiveServices/accounts/agent-lucy-foundry-ncus/projects/agent-lucy-prj-ncus`.
+  - Caveats / follow-ups:
+    - Full member authentication, notice PDF retrieval, and HITL case creation
+      scenario smokes were not run in this deployment pass.
+    - The member Chainlit app still logs the known dashboard-route setup noise;
+      Hosted disables Chainlit/dashboard routes and did not show that failure.
+    - Hosted version definitions still copy secret-bearing environment values;
+      keep config migration/rotation as a separate production-hardening task.
 - Gateway/APIM route remains the rollback and diagnostics bridge until Hosted
   Agent parity is proven.
 
