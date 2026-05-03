@@ -5,7 +5,7 @@ Current state: **prestable, barely**. Lucy Hosted is running and trace/agent met
 ## Read This First
 
 - [ ] Start with `/state/refactor-ledger.md`, especially the `Hosted Agent RBAC/search/dashboard cleanup 2026-04-29` section.
-- [ ] Treat `agent-lucy-hosted-ncus:8` as the current Hosted canary.
+- [ ] Treat `agent-lucy-hosted-ncus:12` as the current Hosted canary.
 - [ ] Treat `agent-lucy-eus2` as the current member-facing Chainlit runtime.
 - [ ] Do not delete or disable the EUS2 gateway/APIM bridge until Hosted proves full production parity.
 - [ ] Use raw App Insights KQL and the Foundry Agent metrics surface as the current evidence path. The main ops dashboard is still not populated/reliable.
@@ -18,22 +18,29 @@ Current state: **prestable, barely**. Lucy Hosted is running and trace/agent met
   - App Insights: `agent-lucy-appins-eus2`
 - [x] Hosted Agent canary is in North Central US:
   - Foundry account/project: `agent-lucy-foundry-ncus` / `agent-lucy-prj-ncus`
-  - Hosted Agent: `agent-lucy-hosted-ncus:8`
-  - ACR image: `agentlucyacrncus.azurecr.io/agent-lucy-hosted:hosted-20260429051054-rbac-dashboard`
+  - Hosted Agent: `agent-lucy-hosted-ncus:12`
+  - ACR image: `agentlucyacrncus.azurecr.io/agent-lucy-hosted:hosted-pr2-20260503072101-convfix`
   - Model deployment: `gpt-5.2`
-- [x] Hosted v8 smoke passed:
-  - Response id: `caresp_e39cb37ecf44b94e00mYcReQTjjYUncDkYOEfos8b2puEO5mrd`
+- [x] Hosted v12 smoke passed:
+  - Response id: `caresp_4f0031a1cb5fec3d00XpJLlinob82htkJ88uOhm6l5enb9339R`
   - SDK status: `completed`
   - Error: `None`
-- [x] Hosted v8 telemetry has canonical agent attributes:
+- [x] Hosted v12 response retrieval passed for the same `caresp_...` id; the
+  prior Hosted target-eval blank-output failure was caused by forwarding Hosted
+  `conv_...` / `caresp_...` wrapper ids into the inner prompt agent.
+- [x] Hosted v12 target evaluation passed:
+  - Eval run: `evalrun_df11a3f7b4f3458b8e2d492d45be85b8`
+  - Output text: `Lucy hosted target evaluation v12 is online.`
+  - Result counts: `passed=1`, `failed=0`, `errored=0`
+- [x] Hosted v12 telemetry should carry canonical agent attributes:
   - `gen_ai.agent.name=agent-lucy-hosted-ncus`
-  - `gen_ai.agent.id=agent-lucy-hosted-ncus:8`
-  - `gen_ai.agent.version=8`
+  - `gen_ai.agent.id=agent-lucy-hosted-ncus:12`
+  - `gen_ai.agent.version=12`
 - [x] Hosted runtime identity has the missing Foundry write permission:
   - Principal: `bf64d26c-34a5-4bc8-a1b2-b22e9ff24b67`
   - Role: `Azure AI Project Manager`
   - Scope: NCUS Foundry project
-- [x] Hosted v8 startup no longer shows:
+- [x] Hosted startup no longer shows:
   - `AuthorizationFailed`
   - missing `Microsoft.CognitiveServices/accounts/projects/applications/write`
   - `search_connection_id_set=false`
@@ -41,9 +48,9 @@ Current state: **prestable, barely**. Lucy Hosted is running and trace/agent met
 
 ## What Still Needs Work
 
-- [ ] Confirm the main Foundry/App Insights ops dashboard starts populating after v8 traffic. Current status: not populated/reliable.
-- [ ] Confirm the Agent-specific metrics surface continues to populate after multiple Hosted v8 runs.
-- [ ] Re-test Hosted-targeted continuous evaluation. Previous blocker was `403 session_not_accessible`; RBAC and publication reconciliation are now improved, but eval success is not yet re-proven.
+- [ ] Confirm the main Foundry/App Insights ops dashboard starts populating after v12 traffic. Current status: not populated/reliable.
+- [ ] Confirm the Agent-specific metrics surface continues to populate after multiple Hosted v12 runs.
+- [ ] Re-test Hosted-targeted continuous evaluation after v12 traffic. A one-off Hosted target eval passed on 2026-05-03, but the old continuous response-eval rule has not yet produced a fresh post-v12 run.
 - [ ] Run a real Hosted canary for the notice path:
   - starter intent: explain notice
   - auth
@@ -62,8 +69,8 @@ Current state: **prestable, barely**. Lucy Hosted is running and trace/agent met
 
 ## Next Agent Plan
 
-- [ ] First, verify live v8 telemetry with KQL before editing code.
-- [ ] Second, generate 3-5 Hosted v8 smoke calls and wait a few minutes for portal lag.
+- [ ] First, verify live v12 telemetry with KQL before editing code.
+- [ ] Second, generate 3-5 Hosted v12 smoke calls and wait a few minutes for portal lag.
 - [ ] Third, check these surfaces in order:
   - Foundry Agent metrics for `agent-lucy-hosted-ncus`
   - App Insights raw traces/dependencies/requests

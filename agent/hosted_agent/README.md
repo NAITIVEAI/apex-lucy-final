@@ -39,9 +39,9 @@ launch attempt. The current Hosted Agent canary is in North Central US:
   `https://agent-lucy-foundry-ncus.services.ai.azure.com/api/projects/agent-lucy-prj-ncus`
 - ACR: `agentlucyacrncus.azurecr.io`
 - Model deployment: `gpt-5.2`
-- Hosted Agent: `agent-lucy-hosted-ncus:8`
+- Hosted Agent: `agent-lucy-hosted-ncus:12`
 - Hosted image:
-  `agentlucyacrncus.azurecr.io/agent-lucy-hosted:hosted-20260429051054-rbac-dashboard`
+  `agentlucyacrncus.azurecr.io/agent-lucy-hosted:hosted-pr2-20260503072101-convfix`
 
 The basic SDK smoke is green:
 
@@ -69,20 +69,28 @@ Expected smoke result: `completed None` with a short Lucy response.
   outer hosted request and dependencies for `create_agent`,
   `invoke_agent agent-lucy-prod:1`, `execute_tool`, and the `gpt-5.2` model
   call.
-- Version 8 telemetry confirms canonical agent dimensions on hosted request,
+- Version 12 response creation and retrieval are both green for Hosted wrapper
+  response ids. The adapter keeps Hosted `caresp_...` / `conv_...` identifiers
+  as Foundry metadata but does not forward them as inner prompt-agent
+  conversation state.
+- Version 12 target evaluation completed successfully with output text, model
+  usage, and `passed=1`, `failed=0`, `errored=0`:
+  `evalrun_df11a3f7b4f3458b8e2d492d45be85b8`.
+- Version 12 telemetry should confirm canonical agent dimensions on hosted request,
   `create_agent`, and `execute_tool` rows:
   `gen_ai.agent.name=agent-lucy-hosted-ncus`,
-  `gen_ai.agent.id=agent-lucy-hosted-ncus:8`, and
-  `gen_ai.agent.version=8`. The stale custom `gen_ai.agents.id=lucy-aca`
+  `gen_ai.agent.id=agent-lucy-hosted-ncus:12`, and
+  `gen_ai.agent.version=12`. The stale custom `gen_ai.agents.id=lucy-aca`
   dimension is no longer emitted by Lucy's custom response loop.
-- Version 8 also carries the explicit AI Search project connection ID and
+- Version 12 also carries the explicit AI Search project connection ID and
   disables Chainlit-only dashboard route registration in the Hosted process.
 - Continuous evaluation is enabled for the inner prompt agent
   `agent-lucy-prod` and produces completed runs.
 - Continuous evaluation rules targeting the outer Hosted Agent
-  `agent-lucy-hosted-ncus` currently create runs but fail with
-  `session_not_accessible`. Treat this as a Foundry preview session-access
-  limitation until Microsoft confirms otherwise.
+  `agent-lucy-hosted-ncus` still need a fresh post-v12 run. Historical v10/v11
+  runs failed with `session_not_accessible`; a v12 one-off Hosted target eval
+  passed after the adapter stopped forwarding Hosted wrapper ids to the inner
+  prompt agent.
 
 ## Build And Push
 

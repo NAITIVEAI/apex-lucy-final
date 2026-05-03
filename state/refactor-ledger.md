@@ -674,6 +674,77 @@ Follow-up:
 
 ---
 
+## Hosted Agent RBAC and v12 conversation isolation fix 2026-05-03
+
+- Status: deployed and verified for Hosted v12 response retrieval plus one-off
+  Hosted target evaluation.
+- Summary:
+  - Cross-checked current Microsoft Foundry Hosted Agent and Monitor dashboard
+    documentation against the live failure. The scheduled eval screenshot was
+    the documented App Insights / Log Analytics authorization failure path.
+  - Assigned the NCUS Foundry project managed identity
+    `d4f3d82d-0056-4e6f-93f8-d1be9b049d94` the missing `Log Analytics Reader`
+    role on both the connected App Insights component
+    `agent-lucy-appins-eus2` and its backing managed Log Analytics workspace.
+    The project identity already had `Log Analytics Data Reader` on the
+    workspace; it now has both roles.
+  - Root-caused the next Hosted eval blocker: the Hosted adapter was copying
+    outer Hosted protocol `conv_...` / `caresp_...` ids into Lucy's inner
+    prompt-agent session, causing inner `agent-lucy-prod` Responses calls to
+    fail with `conversation_not_found` during Foundry target evals.
+  - Updated the adapter so Hosted ids are retained only as metadata
+    (`foundry_conversation_id`, `foundry_previous_response_id`), while Lucy's
+    inner prompt-agent session only receives state from `lucy_session` metadata
+    or real inner `resp_...` ids.
+  - Built and pushed NCUS Hosted image
+    `agentlucyacrncus.azurecr.io/agent-lucy-hosted:hosted-pr2-20260503072101-convfix`
+    (`sha256:6eba51f95558ef0c96ede39c128547761f2e6cfbaa282227f3725297468c477a`).
+  - Created Hosted Agent version `agent-lucy-hosted-ncus:12`; SDK polling
+    reached `status=active`.
+- Files changed:
+  - `agent/hosted_agent/app.py`
+  - `agent/tests/test_hosted_agent_adapter.py`
+  - `TASKS.md`
+  - `agent/hosted_agent/README.md`
+  - `state/refactor-ledger.md`
+- Research evidence:
+  - Microsoft Hosted Agent permissions reference: Hosted setup requires
+    project managed identity access for evaluation telemetry, and distinguishes
+    Foundry data-plane roles from ARM/control-plane roles.
+  - Microsoft Agent Monitoring Dashboard docs: authorization errors mean
+    missing RBAC on Application Insights or the Log Analytics workspace; log
+    access needs `Log Analytics Reader`.
+  - Microsoft Cloud Evaluation docs: Hosted agents are supported as
+    `azure_ai_agent` targets using `azure_ai_target_completions`; response-id
+    evaluation uses the `azure_ai_responses` data source.
+- Tests and live verification:
+  - `python -m pytest agent/tests/test_hosted_agent_adapter.py agent/tests/test_lucy_responses_loop.py -q`
+    -> `40 passed`.
+  - `python -m py_compile agent/hosted_agent/app.py agent/hosted_agent/deploy_hosted_agent.py agent/app/lucy_core/responses_loop.py`
+    -> passed.
+  - Hosted v12 smoke:
+    `caresp_4f0031a1cb5fec3d00XpJLlinob82htkJ88uOhm6l5enb9339R`,
+    `status=completed`, `error=None`, output `Lucy hosted v12 is online.`
+  - Hosted v12 response retrieval for the same `caresp_...` id returned
+    `status=completed`, `error=None`, and the same output text.
+  - Hosted v12 target evaluation run
+    `evalrun_df11a3f7b4f3458b8e2d492d45be85b8` completed with output text
+    `Lucy hosted target evaluation v12 is online.`, `passed=1`, `failed=0`,
+    `errored=0`, and model usage rows for both `azure_ai_system_model` and
+    `gpt-5.2-2025-12-11`.
+- Blockers / follow-ups:
+  - The old broad scheduled eval definition now gets past the App Insights
+    permission failure but needs evaluator data-mapping cleanup for tool-call
+    evaluators before it can be used as the production scheduled benchmark.
+  - The old Hosted continuous response-eval rule has only historical failed
+    v10/v11 runs in the SDK listing; wait for or recreate a clean post-v12
+    continuous rule before calling continuous Hosted eval fully closed.
+  - Main Foundry Operate dashboard population still needs portal/KQL
+    re-check after ingestion lag. Raw Hosted v12 response and one-off eval
+    proof are green.
+
+---
+
 ## Completed Plans
 
 _none yet_

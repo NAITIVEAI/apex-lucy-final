@@ -26,8 +26,13 @@ class _FakeIsolation:
 
 
 class _FakeContext:
-    def __init__(self, text="hello", conversation_id="conv-1", previous_response_id="resp-prev"):
-        self.response_id = "resp-current"
+    def __init__(
+        self,
+        text="hello",
+        conversation_id="conv-foundry",
+        previous_response_id="caresp-prev",
+    ):
+        self.response_id = "caresp-current"
         self.conversation_id = conversation_id
         self.previous_response_id = previous_response_id
         self.isolation = _FakeIsolation()
@@ -66,6 +71,8 @@ class HostedRequestMappingTests(unittest.IsolatedAsyncioTestCase):
             metadata={
                 "lucy_session": {
                     "session_id": "lucy-s",
+                    "conversation_id": "conv-inner",
+                    "previous_response_id": "resp_inner_prev",
                     "authenticated": True,
                     "apex_id": "25ONRR2063",
                     "user_name": "Robert Williams",
@@ -79,10 +86,18 @@ class HostedRequestMappingTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(lucy_request.input_text, "hello")
         self.assertEqual(lucy_request.session.session_id, "lucy-s")
-        self.assertEqual(lucy_request.session.conversation_id, "conv-1")
-        self.assertEqual(lucy_request.session.previous_response_id, "resp-prev")
+        self.assertEqual(lucy_request.session.conversation_id, "conv-inner")
+        self.assertEqual(lucy_request.session.previous_response_id, "resp_inner_prev")
         self.assertTrue(lucy_request.session.authenticated)
         self.assertEqual(lucy_request.session.apex_id, "25ONRR2063")
+        self.assertEqual(
+            lucy_request.session.metadata["foundry_conversation_id"],
+            "conv-foundry",
+        )
+        self.assertEqual(
+            lucy_request.session.metadata["foundry_previous_response_id"],
+            "caresp-prev",
+        )
         self.assertTrue(lucy_request.session.metadata["pending_notice_request"])
         self.assertEqual(
             lucy_request.session.metadata["pending_notice_request_text"],
@@ -121,7 +136,26 @@ class HostedRequestMappingTests(unittest.IsolatedAsyncioTestCase):
         lucy_request = await request_to_lucy_request(_FakeRequest(), _FakeContext())
 
         self.assertEqual(lucy_request.session.session_id, "chat-key-1")
-        self.assertEqual(lucy_request.session.metadata["foundry_response_id"], "resp-current")
+        self.assertIsNone(lucy_request.session.conversation_id)
+        self.assertIsNone(lucy_request.session.previous_response_id)
+        self.assertEqual(lucy_request.session.metadata["foundry_response_id"], "caresp-current")
+
+    async def test_top_level_inner_previous_response_id_is_preserved(self):
+        request = _FakeRequest(previous_response_id="resp_inner_prev")
+
+        lucy_request = await request_to_lucy_request(
+            request,
+            _FakeContext(previous_response_id=None),
+        )
+
+        self.assertEqual(lucy_request.session.previous_response_id, "resp_inner_prev")
+
+    async def test_hosted_wrapper_response_id_is_not_forwarded_to_inner_agent(self):
+        request = _FakeRequest(previous_response_id="caresp-prev")
+
+        lucy_request = await request_to_lucy_request(request, _FakeContext())
+
+        self.assertIsNone(lucy_request.session.previous_response_id)
 
 
 class HostedResponseMappingTests(unittest.TestCase):

@@ -142,6 +142,16 @@ def _previous_response_id_from(request: Any, context: Any, metadata: dict[str, A
     return str(previous_response_id) if previous_response_id else None
 
 
+def _inner_response_id(value: Any) -> str | None:
+    """Return only inner prompt-agent Responses IDs, never Hosted wrapper IDs."""
+    if not value:
+        return None
+    response_id = str(value)
+    if response_id.startswith("resp_") and not response_id.startswith("caresp_"):
+        return response_id
+    return None
+
+
 def _session_id_from(context: Any, metadata: dict[str, Any], conversation_id: str | None) -> str:
     lucy_session = _as_mapping(metadata.get("lucy_session"))
     for value in (
@@ -188,13 +198,16 @@ async def request_to_lucy_request(request: Any, context: Any) -> LucyRequest:
     """Map a Foundry CreateResponse request/context into Lucy's runtime input."""
     metadata = _metadata_from_request(request)
     lucy_session_meta = _as_mapping(metadata.get("lucy_session"))
-    conversation_id = _conversation_id_from(request, context, metadata)
-    previous_response_id = _previous_response_id_from(request, context, metadata)
+    foundry_conversation_id = _conversation_id_from(request, context, metadata)
+    foundry_previous_response_id = _previous_response_id_from(request, context, metadata)
+    inner_conversation_id = lucy_session_meta.get("conversation_id")
+    inner_previous_response_id = _inner_response_id(
+        lucy_session_meta.get("previous_response_id")
+    ) or _inner_response_id(foundry_previous_response_id)
     session = LucySession(
-        session_id=_session_id_from(context, metadata, conversation_id),
-        conversation_id=conversation_id or lucy_session_meta.get("conversation_id"),
-        previous_response_id=previous_response_id
-        or lucy_session_meta.get("previous_response_id"),
+        session_id=_session_id_from(context, metadata, foundry_conversation_id),
+        conversation_id=inner_conversation_id,
+        previous_response_id=inner_previous_response_id,
         last_eval_final_response_id=lucy_session_meta.get("last_eval_final_response_id"),
         authenticated=_strict_bool(
             lucy_session_meta.get("authenticated", metadata.get("authenticated"))
@@ -204,7 +217,8 @@ async def request_to_lucy_request(request: Any, context: Any) -> LucyRequest:
         metadata={
             **_as_mapping(lucy_session_meta.get("metadata")),
             "foundry_response_id": getattr(context, "response_id", None),
-            "foundry_conversation_id": conversation_id,
+            "foundry_conversation_id": foundry_conversation_id,
+            "foundry_previous_response_id": foundry_previous_response_id,
         },
     )
     pending_notice_request = (
