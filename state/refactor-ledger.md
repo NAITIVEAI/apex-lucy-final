@@ -988,6 +988,20 @@ Follow-up:
     `/tmp/foundry_agent_v17_monitor_1M.png`,
     `/tmp/foundry_agent_v18_monitor.png`, and
     `/tmp/foundry_agent_v18_monitor_after_cost.png`.
+  - Fresh SDK invocation on 2026-05-04 at 10:08Z returned
+    `caresp_a07125974af2ed6900vmHmvxhbte6i5KGRazOK1OcskevV5VWq`,
+    `status=completed`, `error=None`, and output
+    `Lucy hosted monitor smoke online.`.
+  - App Insights KQL for that response showed a `create_agent` dependency at
+    `2026-05-04T10:08:44Z` with
+    `gen_ai.agent.id=agent-lucy-hosted-ncus:18`,
+    `gen_ai.agent.name=agent-lucy-hosted-ncus`,
+    `gen_ai.agent.version=18`, `gen_ai.response.model=gpt-5.2-chat`, and
+    `gen_ai.usage.total_tokens=4931`.
+  - Direct Azure Monitor query over the following 30-minute project metrics
+    window still returned total `0` for `AgentResponses`, `AgentInputTokens`,
+    `AgentOutputTokens`, `AgentRuns`, and `AgentToolCalls` in namespace
+    `microsoft.cognitiveservices/accounts/projects`.
 - Blockers / follow-ups:
   - Native Foundry Monitor cards are now blocked on Microsoft/project-metrics
     aggregation, not Lucy runtime telemetry. The page can extract hosted token

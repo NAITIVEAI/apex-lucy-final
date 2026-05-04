@@ -26,6 +26,11 @@ Current state: **prestable, barely**. Lucy Hosted v18 is running and raw App Ins
   - Response ids: `caresp_6e3cef1977800ae8001mKvC6cTbwaufx0M38O9OaTg685nkgNU`, `caresp_2abfdd0d9cda8e7e00HgyEXzdoZhd211nSW7bHFzxkeMG3uEDf`, `caresp_9d6af8231fea912200m0bdCxUuf9yyXpimyhR961t0Rpe4Ber7`
   - SDK status: `completed`
   - Error: `None`
+- [x] Fresh Hosted v18 monitor-verification SDK smoke passed on 2026-05-04:
+  - Response id: `caresp_a07125974af2ed6900vmHmvxhbte6i5KGRazOK1OcskevV5VWq`
+  - SDK status: `completed`
+  - Error: `None`
+  - Output: `Lucy hosted monitor smoke online.`
 - [x] Hosted v13 response retrieval passed for the same `caresp_...` id; the
   prior Hosted target-eval blank-output failure was caused by forwarding Hosted
   `conv_...` / `caresp_...` wrapper ids into the inner prompt agent.
@@ -56,7 +61,7 @@ Current state: **prestable, barely**. Lucy Hosted v18 is running and raw App Ins
 
 ## What Still Needs Work
 
-- [ ] Native Foundry Monitor still needs Microsoft/portal aggregation closure. Current status after v18: App Insights has valid hosted `create_agent` usage rows and GenAI client metrics, and the Foundry cost API returns hosted token totals, but the Monitor cards still show `$0` and `Total token usage 0` because the project metrics namespace returns empty `AgentResponses` / `AgentInputTokens` series.
+- [ ] Native Foundry Monitor still needs Microsoft/portal aggregation closure. Current status after v18: App Insights has valid hosted `create_agent` usage rows and GenAI client metrics, and the Foundry cost API returns hosted token totals, but the Monitor cards still show `$0` and `Total token usage 0` because the project metrics namespace returns zero `AgentResponses` / `AgentInputTokens` / `AgentOutputTokens` / `AgentRuns` / `AgentToolCalls` series even immediately after fresh SDK traffic.
 - [x] Build a COO-safe dashboard fallback using KQL/custom workbook while the preview ops dashboard remains flaky.
 - [ ] Re-test Hosted-targeted continuous evaluation after v15 traffic. A one-off Hosted target eval passed on 2026-05-03 for v13, but the old continuous response-eval rule has not yet produced a fresh post-v15 run.
 - [ ] Run a real Hosted canary for the notice path:

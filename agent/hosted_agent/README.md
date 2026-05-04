@@ -74,6 +74,10 @@ Expected smoke result: `completed None` with a short Lucy response.
   response ids. The adapter keeps Hosted `caresp_...` / `conv_...` identifiers
   as Foundry metadata but does not forward them as inner prompt-agent
   conversation state.
+- A fresh monitor-verification SDK smoke on 2026-05-04 returned
+  `caresp_a07125974af2ed6900vmHmvxhbte6i5KGRazOK1OcskevV5VWq`,
+  `status=completed`, `error=None`, and output
+  `Lucy hosted monitor smoke online.`
 - Version 13 target evaluation completed successfully with output text, model
   usage, and `passed=1`, `failed=0`, `errored=0`:
   `evalrun_b03b7e0521e642c6986d3e84e10b65a3`.
@@ -99,9 +103,10 @@ Expected smoke result: `completed None` with a short Lucy response.
 - The native Foundry Monitor tab still shows `$0` and `Total token usage 0`
   after v18 traffic. The page's own cost API returns hosted token totals for
   v18, but its Azure Monitor project metrics calls still return empty
-  `AgentResponses`, `AgentInputTokens`, and `AgentToolCalls` timeseries. The
-  current COO-safe fallback is the Azure Monitor workbook `Lucy Hosted COO Monitor`
-  (`d93d5898-c385-40ff-978e-eea3dbf03332`) on App Insights
+  or zero `AgentResponses`, `AgentInputTokens`, `AgentOutputTokens`,
+  `AgentRuns`, and `AgentToolCalls` timeseries even after fresh SDK traffic.
+  The current COO-safe fallback is the Azure Monitor workbook
+  `Lucy Hosted COO Monitor` (`d93d5898-c385-40ff-978e-eea3dbf03332`) on App Insights
   `agent-lucy-appins-eus2`.
 - Continuous evaluation is enabled for the inner prompt agent
   `agent-lucy-prod` and produces completed runs.
