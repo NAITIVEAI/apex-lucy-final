@@ -39,10 +39,10 @@ launch attempt. The current Hosted Agent canary is in North Central US:
   `https://agent-lucy-foundry-ncus.services.ai.azure.com/api/projects/agent-lucy-prj-ncus`
 - ACR: `agentlucyacrncus.azurecr.io`
 - Model deployment: `gpt-5.2-chat`
-- Hosted Agent: `agent-lucy-hosted-ncus:13`
+- Hosted Agent: `agent-lucy-hosted-ncus:15`
 - Inner prompt agent: `agent-lucy-prod:6`
 - Hosted image:
-  `agentlucyacrncus.azurecr.io/agent-lucy-hosted:hosted-pr2-20260503072101-convfix`
+  `agentlucyacrncus.azurecr.io/agent-lucy-hosted:hosted-pr2-20260504090635-otelkind`
 
 The basic SDK smoke is green:
 
@@ -70,25 +70,35 @@ Expected smoke result: `completed None` with a short Lucy response.
   outer hosted request and dependencies for `create_agent`,
   `invoke_agent agent-lucy-prod:6`, `execute_tool`, and the
   `gpt-5.2-chat-2025-12-11` model call.
-- Version 13 response creation and retrieval are both green for Hosted wrapper
+- Version 15 response creation is green for Hosted wrapper
   response ids. The adapter keeps Hosted `caresp_...` / `conv_...` identifiers
   as Foundry metadata but does not forward them as inner prompt-agent
   conversation state.
 - Version 13 target evaluation completed successfully with output text, model
   usage, and `passed=1`, `failed=0`, `errored=0`:
   `evalrun_b03b7e0521e642c6986d3e84e10b65a3`.
-- Version 13 telemetry confirms canonical agent dimensions on hosted request,
-  `create_agent`, and `execute_tool` rows:
+- Version 15 telemetry confirms canonical agent dimensions on hosted request,
+  `create_agent`, and model/tool rows:
   `gen_ai.agent.name=agent-lucy-hosted-ncus`,
-  `gen_ai.agent.id=agent-lucy-hosted-ncus:13`, and
-  `gen_ai.agent.version=13`. The stale custom `gen_ai.agents.id=lucy-aca`
-  dimension is no longer emitted by Lucy's custom response loop.
-- Version 13 also carries the explicit AI Search project connection ID and
+  `gen_ai.agent.id=agent-lucy-hosted-ncus:15`, and
+  `gen_ai.agent.version=15`. Hosted `create_agent` rows also carry
+  `gen_ai.provider.name=azure.ai.foundry`,
+  `gen_ai.response.model=gpt-5.2-chat`, and populated
+  `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`, and
+  `gen_ai.usage.total_tokens`. The stale custom
+  `gen_ai.agents.id=lucy-aca` dimension is no longer emitted by Lucy's custom
+  response loop.
+- Version 15 also carries the explicit AI Search project connection ID and
   disables Chainlit-only dashboard route registration in the Hosted process.
-- Version 13 aligns `MODEL_DEPLOYMENT_NAME`, `AZURE_AGENT_MODEL`, and
+- Version 15 aligns `MODEL_DEPLOYMENT_NAME`, `AZURE_AGENT_MODEL`, and
   `AZURE_GPT_MODEL` to `gpt-5.2-chat`; `MODEL_DEPLOYMENT_NAME` wins in Lucy's
   code path, so leaving it at base `gpt-5.2` silently routes the inner prompt
   agent to the wrong model lane.
+- The native Foundry Monitor tab still shows `$0` and `Total token usage 0`
+  after v15 traffic. The current COO-safe fallback is the Azure Monitor workbook
+  `Lucy Hosted COO Monitor`
+  (`d93d5898-c385-40ff-978e-eea3dbf03332`) on App Insights
+  `agent-lucy-appins-eus2`.
 - Continuous evaluation is enabled for the inner prompt agent
   `agent-lucy-prod` and produces completed runs.
 - Continuous evaluation rules targeting the outer Hosted Agent

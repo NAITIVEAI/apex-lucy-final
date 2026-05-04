@@ -802,6 +802,103 @@ Follow-up:
 
 ---
 
+## Hosted Agent dashboard telemetry hardening 2026-05-04
+
+- Status: deployed and verified for Hosted v15 raw telemetry; native Foundry
+  Monitor remains blocked by portal aggregation/display behavior.
+- Summary:
+  - Verified current Microsoft Foundry custom-agent monitoring guidance before
+    editing. The dashboard path requires the registered custom agent to emit
+    OpenTelemetry GenAI semantic-convention spans to the same App Insights
+    resource, with `gen_ai.operation.name="create_agent"` and
+    `gen_ai.agent.id` / `gen_ai.agent.name` matching the registered OTel agent
+    identity. OpenTelemetry GenAI conventions also define response id/model and
+    token usage attributes for GenAI spans.
+  - Root-caused the v13 dashboard gap in App Insights: Hosted `create_agent`
+    rows had `gen_ai.agent.id=agent-lucy-hosted-ncus:13`, but lacked response
+    model and token usage. The actual usage lived only on the inner
+    `agent-lucy-prod:6` model dependency rows, so the Hosted dashboard had no
+    hosted-owned usage to aggregate.
+  - Updated Lucy's response loop to propagate final Responses API telemetry
+    onto the hosted `create_agent` span:
+    `gen_ai.response.id`, `gen_ai.response.model`,
+    `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`, and
+    `gen_ai.usage.total_tokens`.
+  - Added `gen_ai.provider.name=azure.ai.foundry` and emitted the
+    `create_agent` span as `SpanKind.CLIENT` to align with current
+    OpenTelemetry GenAI agent-span conventions.
+  - Built and pushed:
+    - v14 image
+      `agentlucyacrncus.azurecr.io/agent-lucy-hosted:hosted-pr2-20260504085032-telemetry`
+      (`sha256:974f40ede01051558ff8d04d2095c62a593d735e3d64a97f719d1d6b7408edf0`)
+    - v15 image
+      `agentlucyacrncus.azurecr.io/agent-lucy-hosted:hosted-pr2-20260504090635-otelkind`
+      (`sha256:e458b27f5857aa5825fff2f4f0421a8e151c86a0072f3a68b9da7e763614510b`)
+  - Created Hosted Agent versions `agent-lucy-hosted-ncus:14` and
+    `agent-lucy-hosted-ncus:15` by cloning the prior Hosted environment and
+    changing only the image plus explicit `LUCY_OTEL_AGENT_VERSION`.
+  - Created the Azure Monitor workbook fallback `Lucy Hosted COO Monitor`
+    (`/subscriptions/22f9f915-587f-4a9a-acff-69b061ef48e1/resourcegroups/agent-lucy-eus2/providers/microsoft.insights/workbooks/d93d5898-c385-40ff-978e-eea3dbf03332`)
+    against App Insights `agent-lucy-appins-eus2`.
+- Files changed:
+  - `agent/app/lucy_core/responses_loop.py`
+  - `agent/tests/test_lucy_responses_loop.py`
+  - `TASKS.md`
+  - `agent/hosted_agent/README.md`
+  - `state/refactor-ledger.md`
+- Research evidence:
+  - Microsoft Foundry Agent Monitoring Dashboard docs, updated 2026-04-30:
+    custom agents must be onboarded, instrumented to GenAI OpenTelemetry
+    conventions, and send telemetry to the same App Insights instance as the
+    Foundry project.
+  - Microsoft Foundry custom-agent registration docs: the OpenTelemetry Agent
+    ID is matched through `gen_ai.agent.id` on spans where
+    `gen_ai.operation.name="create_agent"`; troubleshooting requires the same
+    App Insights resource and GenAI semantic-convention compliance.
+  - OpenTelemetry GenAI span conventions: `gen_ai.response.id`,
+    `gen_ai.response.model`, `gen_ai.usage.input_tokens`, and
+    `gen_ai.usage.output_tokens` are defined GenAI span attributes.
+  - OpenTelemetry GenAI agent-span conventions: `create_agent` should use
+    `gen_ai.operation.name="create_agent"`, include provider and agent
+    identity attributes, and use CLIENT span kind.
+- Tests and live verification:
+  - `pytest -q agent/tests/test_lucy_responses_loop.py` -> `35 passed`.
+  - `pytest -q agent/tests/test_lucy_runtime.py agent/tests/test_lucy_responses_loop.py`
+    -> `40 passed`.
+  - `python -m py_compile agent/app/lucy_core/responses_loop.py` -> passed.
+  - Hosted v14 smoke response ids:
+    `caresp_0bd86f079fbf831d00uXtxUJPouJ84cyOxJYsMXV06eIkcT4Mk`,
+    `caresp_809a63646da2aa2000MtScEF3yhM3jwtAJYj7NNS1OCZYREYlt`,
+    `caresp_2476b60ca3c6dd4100tx7jit6Ak7HValVtRB52KYWZ3RRPjll2`;
+    all `status=completed`, `error=None`.
+  - Hosted v15 smoke response ids:
+    `caresp_80974b8a0367e54500usMJx1drNCMu1Ejne4LRdACjJW5ZlnVp`,
+    `caresp_1ef403146a2ebc4700f0wXyuOGbTUYAZpeSfemnH3mfyGJLwke`,
+    `caresp_e4833a4a0308afcd0028IggFVsUwtFSwxk2jHIKfZMRRpOE9ur`;
+    all `status=completed`, `error=None`.
+  - App Insights KQL for Hosted v15 `create_agent` rows shows:
+    `agent_id=agent-lucy-hosted-ncus:15`,
+    `agent_name=agent-lucy-hosted-ncus`, `agent_version=15`,
+    `operation=create_agent`, `provider=azure.ai.foundry`,
+    `request_model=gpt-5.2-chat`, `response_model=gpt-5.2-chat`,
+    and token totals `4724`, `4763`, and `4741` for the three v15 smokes.
+  - Foundry Build visual check shows `agent-lucy-hosted-ncus` at v15 using
+    image `hosted-pr2-20260504090635-otelkind`.
+  - Foundry Monitor visual check after v15 still shows `Estimated cost $0` and
+    `Total token usage 0`, despite raw App Insights rows being populated.
+- Blockers / follow-ups:
+  - Native Foundry Monitor/Operate aggregation remains blocked outside Lucy's
+    runtime instrumentation. The live telemetry now matches the documented
+    custom-agent trace contract, so the remaining gap is the preview portal /
+    workbook aggregation path.
+  - Use `Lucy Hosted COO Monitor` for COO/demo usage and success evidence until
+    the native Foundry dashboard displays the same App Insights data.
+  - Re-test or recreate Hosted-targeted continuous evaluation after v15.
+  - Full notice-auth-PDF-HITL canary remains pending after observability
+    fallback acceptance.
+
+---
+
 ## Completed Plans
 
 _none yet_

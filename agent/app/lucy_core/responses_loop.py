@@ -37,7 +37,7 @@ from response_config import should_include_max_output_tokens
 # tab filters on (gen_ai.agents.id). When the OTel SDK isn't initialized, the
 # tracer returns a no-op span — safe in tests and dev environments.
 from opentelemetry import trace as _otel_trace
-from opentelemetry.trace import Status, StatusCode
+from opentelemetry.trace import SpanKind, Status, StatusCode
 
 _tracer = _otel_trace.get_tracer("lucy_core.responses_loop")
 
@@ -96,6 +96,84 @@ def _content_recording_enabled() -> bool:
         os.getenv("AZURE_TRACING_GEN_AI_CONTENT_RECORDING_ENABLED", "false").lower()
         in {"1", "true", "yes", "on"}
     )
+
+
+def _response_value(source: Any, key: str) -> Any:
+    if isinstance(source, dict):
+        return source.get(key)
+    return getattr(source, key, None)
+
+
+def _first_response_value(source: Any, *keys: str) -> Any:
+    for key in keys:
+        value = _response_value(source, key)
+        if value is not None:
+            return value
+    return None
+
+
+def _coerce_token_count(value: Any) -> Optional[int]:
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    if isinstance(value, str):
+        text = value.strip()
+        if text.isdigit():
+            return int(text)
+    return None
+
+
+def collect_response_telemetry(response: Any) -> dict[str, Any]:
+    """Collect non-content GenAI telemetry from a Responses API response."""
+    telemetry: dict[str, Any] = {}
+
+    response_id = _response_value(response, "id")
+    if response_id:
+        telemetry["gen_ai.response.id"] = str(response_id)
+
+    model = _first_response_value(response, "model", "deployment", "deployment_name")
+    if model:
+        telemetry["gen_ai.response.model"] = str(model)
+
+    usage = _response_value(response, "usage")
+    input_tokens = _coerce_token_count(
+        _first_response_value(usage, "input_tokens", "prompt_tokens")
+    )
+    output_tokens = _coerce_token_count(
+        _first_response_value(usage, "output_tokens", "completion_tokens")
+    )
+    total_tokens = _coerce_token_count(
+        _first_response_value(usage, "total_tokens", "total")
+    )
+    if total_tokens is None and input_tokens is not None and output_tokens is not None:
+        total_tokens = input_tokens + output_tokens
+
+    if input_tokens is not None:
+        telemetry["gen_ai.usage.input_tokens"] = input_tokens
+    if output_tokens is not None:
+        telemetry["gen_ai.usage.output_tokens"] = output_tokens
+    if total_tokens is not None:
+        telemetry["gen_ai.usage.total_tokens"] = total_tokens
+
+    return telemetry
+
+
+def _set_response_telemetry(span: Any, telemetry: dict[str, Any]) -> None:
+    for key, value in telemetry.items():
+        if value is not None:
+            span.set_attribute(key, value)
+
+
+def _get_otel_agent_version(otel_agent_id: str) -> str:
+    explicit_version = os.getenv("LUCY_OTEL_AGENT_VERSION", "").strip()
+    if explicit_version:
+        return explicit_version
+    if ":" in otel_agent_id:
+        return otel_agent_id.rsplit(":", 1)[-1].strip()
+    return ""
 
 
 def build_authenticated_state_items(session: LucySession) -> list[dict[str, Any]]:
@@ -291,18 +369,26 @@ async def run_response_v2(
     `gen_ai.system`, `gen_ai.request.model`).
     """
     otel_agent_id = os.getenv("LUCY_OTEL_AGENT_ID", "lucy-aca")
+    request_model = _get_model_deployment_name() or agent_name
+    span_attributes = {
+        "operation": "create_agent",
+        "gen_ai.operation.name": "create_agent",
+        "gen_ai.agent.id": otel_agent_id,
+        "gen_ai.agent.name": otel_agent_id,
+        "gen_ai.provider.name": "azure.ai.foundry",
+        "gen_ai.system": "azure.ai.foundry",
+        "gen_ai.request.model": request_model,
+        "lucy.session.id": session.session_id,
+        "lucy.conversation.id": session.conversation_id or "",
+    }
+    otel_agent_version = _get_otel_agent_version(otel_agent_id)
+    if otel_agent_version:
+        span_attributes["gen_ai.agent.version"] = otel_agent_version
+
     with _tracer.start_as_current_span(
         "create_agent",
-        attributes={
-            "operation": "create_agent",
-            "gen_ai.operation.name": "create_agent",
-            "gen_ai.agent.id": otel_agent_id,
-            "gen_ai.agent.name": otel_agent_id,
-            "gen_ai.system": "azure.ai.foundry",
-            "gen_ai.request.model": agent_name,
-            "lucy.session.id": session.session_id,
-            "lucy.conversation.id": session.conversation_id or "",
-        },
+        kind=SpanKind.CLIENT,
+        attributes=span_attributes,
     ) as span:
         if _content_recording_enabled():
             span.set_attribute("eval.user_input", _truncate_span_value(user_text))
@@ -319,6 +405,7 @@ async def run_response_v2(
             span.set_attribute("tools_used", json.dumps([
                 item.get("name", "") for item in result.get("tool_outputs", [])
             ]))
+            _set_response_telemetry(span, result.get("_telemetry", {}))
             if session.last_eval_final_response_id:
                 span.set_attribute(
                     "lucy.eval.final_response_id",
@@ -572,4 +659,8 @@ async def _run_response_v2_impl(
         eval_step_index,
     )
 
-    return {"text": assistant_text, "tool_outputs": tool_outputs}
+    return {
+        "text": assistant_text,
+        "tool_outputs": tool_outputs,
+        "_telemetry": collect_response_telemetry(response),
+    }
