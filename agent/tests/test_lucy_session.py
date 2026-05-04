@@ -103,10 +103,18 @@ class LucyCorePackageImportTests(unittest.TestCase):
 import lucy_core
 import sys
 
-assert "lucy_core.runtime" not in sys.modules
-assert "lucy_core.responses_loop" not in sys.modules
-assert lucy_core.LucyRuntime.__name__ == "LucyRuntime"
-assert "lucy_core.runtime" in sys.modules
+if "lucy_core.runtime" in sys.modules:
+    print("Error: lucy_core.runtime should not be in sys.modules yet", file=sys.stderr)
+    sys.exit(1)
+if "lucy_core.responses_loop" in sys.modules:
+    print("Error: lucy_core.responses_loop should not be in sys.modules yet", file=sys.stderr)
+    sys.exit(1)
+if lucy_core.LucyRuntime.__name__ != "LucyRuntime":
+    print("Error: lucy_core.LucyRuntime.__name__ should be 'LucyRuntime'", file=sys.stderr)
+    sys.exit(1)
+if "lucy_core.runtime" not in sys.modules:
+    print("Error: lucy_core.runtime should now be in sys.modules", file=sys.stderr)
+    sys.exit(1)
 """
         result = subprocess.run(
             [sys.executable, "-c", script],
