@@ -1,11 +1,11 @@
 # TASKS.md
 
-Current state: **prestable, barely**. Lucy Hosted v18 is running and raw App Insights telemetry now has hosted `create_agent` model/token usage plus GenAI client metrics, but the native Foundry Monitor cards still show zero usage. Use the KQL-backed COO workbook until the preview project-metrics aggregation path catches up or Microsoft resolves it.
+Current state: **prestable, barely**. Lucy Hosted v20 is running and raw App Insights telemetry now has hosted `create_agent` plus Operate-workbook-compatible `chat` model/token usage. The older native Foundry Build Monitor cards still show zero usage because the preview project-metrics namespace remains empty. Use App Insights KQL / the COO workbook as the verified evidence path until visual portal proof is captured.
 
 ## Read This First
 
 - [ ] Start with `/state/refactor-ledger.md`, especially the `Hosted Agent RBAC/search/dashboard cleanup 2026-04-29` section.
-- [ ] Treat `agent-lucy-hosted-ncus:18` as the current Hosted canary.
+- [ ] Treat `agent-lucy-hosted-ncus:20` as the current Hosted canary.
 - [ ] Treat `agent-lucy-eus2` as the current member-facing Chainlit runtime.
 - [ ] Do not delete or disable the EUS2 gateway/APIM bridge until Hosted proves full production parity.
 - [ ] Use raw App Insights KQL and the `Lucy Hosted COO Monitor` workbook as the current evidence path. The native Foundry Monitor tab is still not populated/reliable.
@@ -18,19 +18,19 @@ Current state: **prestable, barely**. Lucy Hosted v18 is running and raw App Ins
   - App Insights: `agent-lucy-appins-eus2`
 - [x] Hosted Agent canary is in North Central US:
   - Foundry account/project: `agent-lucy-foundry-ncus` / `agent-lucy-prj-ncus`
-  - Hosted Agent: `agent-lucy-hosted-ncus:18`
-  - ACR image: `agentlucyacrncus.azurecr.io/agent-lucy-hosted:hosted-pr2-20260504094430-foundrymetricdims`
+  - Hosted Agent: `agent-lucy-hosted-ncus:20`
+  - ACR image: `agentlucyacrncus.azurecr.io/agent-lucy-hosted:hosted-pr2-20260504102638-operatechatspan`
   - Model deployment: `gpt-5.2-chat`
   - Inner prompt agent: `agent-lucy-prod:6`
 - [x] Hosted v18 smoke passed:
   - Response ids: `caresp_6e3cef1977800ae8001mKvC6cTbwaufx0M38O9OaTg685nkgNU`, `caresp_2abfdd0d9cda8e7e00HgyEXzdoZhd211nSW7bHFzxkeMG3uEDf`, `caresp_9d6af8231fea912200m0bdCxUuf9yyXpimyhR961t0Rpe4Ber7`
   - SDK status: `completed`
   - Error: `None`
-- [x] Fresh Hosted v18 monitor-verification SDK smoke passed on 2026-05-04:
-  - Response id: `caresp_a07125974af2ed6900vmHmvxhbte6i5KGRazOK1OcskevV5VWq`
+- [x] Fresh Hosted v20 Operate telemetry SDK smoke passed on 2026-05-04:
+  - Response id: `caresp_2fb55937c05798c300kxfQqrvat8JXYmHvNWqKUzsyX7mod9So`
   - SDK status: `completed`
   - Error: `None`
-  - Output: `Lucy hosted monitor smoke online.`
+  - Output: `Lucy hosted operate chat span online.`
 - [x] Hosted v13 response retrieval passed for the same `caresp_...` id; the
   prior Hosted target-eval blank-output failure was caused by forwarding Hosted
   `conv_...` / `caresp_...` wrapper ids into the inner prompt agent.
@@ -38,13 +38,13 @@ Current state: **prestable, barely**. Lucy Hosted v18 is running and raw App Ins
   - Eval run: `evalrun_b03b7e0521e642c6986d3e84e10b65a3`
   - Output text: `The Lucy-hosted Target Evaluation v13 chat is now online.`
   - Result counts: `passed=1`, `failed=0`, `errored=0`
-- [x] Hosted v18 telemetry carries canonical agent attributes, provider, model, token usage, and GenAI client metrics:
+- [x] Hosted v20 telemetry carries canonical agent attributes, provider, model, token usage, workbook-compatible `chat` spans, and GenAI client metrics:
   - `gen_ai.agent.name=agent-lucy-hosted-ncus`
-  - `gen_ai.agent.id=agent-lucy-hosted-ncus:18`
-  - `gen_ai.agent.version=18`
+  - `gen_ai.agent.id=agent-lucy-hosted-ncus:20`
+  - `gen_ai.agent.version=20`
   - `gen_ai.provider.name=azure.ai.foundry`
   - `gen_ai.response.model=gpt-5.2-chat`
-  - `gen_ai.usage.total_tokens` populated on the hosted `create_agent` span
+  - `gen_ai.usage.total_tokens` populated on the hosted `create_agent` and `chat` spans
   - `gen_ai.client.token.usage` and `gen_ai.client.operation.duration` exported to App Insights custom metrics
 - [x] KQL-backed COO workbook exists:
   - Display name: `Lucy Hosted COO Monitor`
@@ -61,7 +61,7 @@ Current state: **prestable, barely**. Lucy Hosted v18 is running and raw App Ins
 
 ## What Still Needs Work
 
-- [ ] Native Foundry Monitor still needs Microsoft/portal aggregation closure. Current status after v18: App Insights has valid hosted `create_agent` usage rows and GenAI client metrics, and the Foundry cost API returns hosted token totals, but the Monitor cards still show `$0` and `Total token usage 0` because the project metrics namespace returns zero `AgentResponses` / `AgentInputTokens` / `AgentOutputTokens` / `AgentRuns` / `AgentToolCalls` series even immediately after fresh SDK traffic.
+- [ ] Native Foundry visual proof still needs closure. Current status after v20: App Insights has valid hosted `create_agent` and Operate-workbook-compatible `chat` usage rows, and the workbook-shaped KQL returns non-zero rows/tokens. The older project metrics namespace still returns zero `AgentResponses` / `AgentInputTokens` / `AgentOutputTokens` / `AgentRuns` / `AgentToolCalls` series immediately after fresh SDK traffic, so do not claim the Build Monitor cards are fixed without a fresh screenshot.
 - [x] Build a COO-safe dashboard fallback using KQL/custom workbook while the preview ops dashboard remains flaky.
 - [ ] Re-test Hosted-targeted continuous evaluation after v15 traffic. A one-off Hosted target eval passed on 2026-05-03 for v13, but the old continuous response-eval rule has not yet produced a fresh post-v15 run.
 - [ ] Run a real Hosted canary for the notice path:

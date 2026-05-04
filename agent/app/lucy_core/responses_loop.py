@@ -35,7 +35,7 @@ from foundry_v2 import build_agent_reference
 from response_config import should_include_max_output_tokens
 
 # OpenTelemetry — emits GenAI semantic-convention spans that Foundry's Monitor
-# tab filters on (gen_ai.agents.id). When the OTel SDK isn't initialized, the
+# tab filters on (gen_ai.agent.id). When the OTel SDK isn't initialized, the
 # tracer returns a no-op span — safe in tests and dev environments.
 from opentelemetry import trace as _otel_trace
 from opentelemetry.trace import SpanKind, Status, StatusCode
@@ -46,6 +46,9 @@ _metric_provider: Any | None = None
 _metric_instruments: dict[str, Any] = {}
 
 logger = logging.getLogger(__name__)
+
+_AGENT_OPERATION_NAME = "create_agent"
+_INFERENCE_OPERATION_NAME = "chat"
 
 
 def _get_model_deployment_name() -> str:
@@ -278,6 +281,70 @@ def _metric_attributes(
     if response_model:
         attributes["gen_ai.response.model"] = response_model
     return attributes
+
+
+def _genai_span_attributes(
+    *,
+    operation: str,
+    request_model: str,
+    session: LucySession,
+    otel_agent_id: str,
+    otel_agent_version: str,
+) -> dict[str, Any]:
+    attributes: dict[str, Any] = {
+        "operation": operation,
+        "gen_ai.operation.name": operation,
+        "gen_ai.agent.id": otel_agent_id,
+        "gen_ai.agent.name": otel_agent_id,
+        "gen_ai.provider.name": "azure.ai.foundry",
+        "gen_ai.system": "azure.ai.foundry",
+        "gen_ai.request.model": request_model,
+        "lucy.session.id": session.session_id,
+        "lucy.conversation.id": session.conversation_id or "",
+    }
+    if otel_agent_version:
+        attributes["gen_ai.agent.version"] = otel_agent_version
+    project_id = _foundry_project_id()
+    if project_id:
+        attributes["microsoft.foundry.project.id"] = project_id
+    return attributes
+
+
+def _annotate_response_span(
+    span: Any,
+    *,
+    result: dict[str, Any],
+    session: LucySession,
+    user_text: str,
+) -> None:
+    span.set_attribute("response_length", len(result.get("text", "")))
+    span.set_attribute("tools_used", json.dumps([
+        item.get("name", "") for item in result.get("tool_outputs", [])
+    ]))
+    telemetry = result.get("_telemetry", {})
+    _set_response_telemetry(span, telemetry)
+    if session.last_eval_final_response_id:
+        span.set_attribute(
+            "lucy.eval.final_response_id",
+            session.last_eval_final_response_id,
+        )
+    if _content_recording_enabled():
+        span.set_attribute("eval.user_input", _truncate_span_value(user_text))
+        span.set_attribute(
+            "eval.agent_response",
+            _truncate_span_value(result.get("text", "")),
+        )
+        span.set_attribute(
+            "eval.tools_used",
+            _truncate_span_value(result.get("tool_outputs", [])),
+        )
+
+
+def _annotate_error_span(span: Any, exc: Exception) -> None:
+    span.set_attribute("error.type", type(exc).__name__)
+    span.set_attribute("error.message", _truncate_span_value(str(exc)))
+    span.set_status(Status(StatusCode.ERROR, str(exc)))
+    span.record_exception(exc)
 
 
 def record_response_metrics(
@@ -530,64 +597,65 @@ async def run_response_v2(
     Caller must verify openai_client/agent_name/agent_version are initialized
     before calling — this function does not initialize the Foundry client.
 
-    Emits an OpenTelemetry span named "create_agent" with GenAI semantic-
-    convention attributes (`operation`, `gen_ai.agent.id`, `gen_ai.agent.name`,
-    `gen_ai.system`, `gen_ai.request.model`).
+    Emits an OpenTelemetry span named "create_agent" for Foundry custom-agent
+    correlation and a nested "chat" span for the Operate/Application Analytics
+    inference-call workbook. Both carry GenAI semantic-convention attributes
+    (`operation`, `gen_ai.agent.id`, `gen_ai.agent.name`, `gen_ai.system`,
+    `gen_ai.request.model`).
     """
     otel_agent_id = os.getenv("LUCY_OTEL_AGENT_ID", "lucy-aca")
     request_model = _get_model_deployment_name() or agent_name
     start_time = time.monotonic()
-    span_attributes = {
-        "operation": "create_agent",
-        "gen_ai.operation.name": "create_agent",
-        "gen_ai.agent.id": otel_agent_id,
-        "gen_ai.agent.name": otel_agent_id,
-        "gen_ai.provider.name": "azure.ai.foundry",
-        "gen_ai.system": "azure.ai.foundry",
-        "gen_ai.request.model": request_model,
-        "lucy.session.id": session.session_id,
-        "lucy.conversation.id": session.conversation_id or "",
-    }
     otel_agent_version = _get_otel_agent_version(otel_agent_id)
-    if otel_agent_version:
-        span_attributes["gen_ai.agent.version"] = otel_agent_version
+    span_attributes = _genai_span_attributes(
+        operation=_AGENT_OPERATION_NAME,
+        request_model=request_model,
+        session=session,
+        otel_agent_id=otel_agent_id,
+        otel_agent_version=otel_agent_version,
+    )
+    inference_span_attributes = _genai_span_attributes(
+        operation=_INFERENCE_OPERATION_NAME,
+        request_model=request_model,
+        session=session,
+        otel_agent_id=otel_agent_id,
+        otel_agent_version=otel_agent_version,
+    )
 
     with _tracer.start_as_current_span(
-        "create_agent",
+        _AGENT_OPERATION_NAME,
         kind=SpanKind.CLIENT,
         attributes=span_attributes,
     ) as span:
         if _content_recording_enabled():
             span.set_attribute("eval.user_input", _truncate_span_value(user_text))
         try:
-            result = await _run_response_v2_impl(
-                user_text=user_text,
-                session=session,
-                openai_client=openai_client,
-                agent_name=agent_name,
-                agent_version=agent_version,
-                function_registry=function_registry,
-            )
-            span.set_attribute("response_length", len(result.get("text", "")))
-            span.set_attribute("tools_used", json.dumps([
-                item.get("name", "") for item in result.get("tool_outputs", [])
-            ]))
+            with _tracer.start_as_current_span(
+                _INFERENCE_OPERATION_NAME,
+                kind=SpanKind.CLIENT,
+                attributes=inference_span_attributes,
+            ) as inference_span:
+                try:
+                    result = await _run_response_v2_impl(
+                        user_text=user_text,
+                        session=session,
+                        openai_client=openai_client,
+                        agent_name=agent_name,
+                        agent_version=agent_version,
+                        function_registry=function_registry,
+                    )
+                except Exception as exc:
+                    _annotate_error_span(inference_span, exc)
+                    raise
+                _annotate_response_span(
+                    inference_span,
+                    result=result,
+                    session=session,
+                    user_text=user_text,
+                )
+                inference_span.set_status(Status(StatusCode.OK))
+            _annotate_response_span(span, result=result, session=session, user_text=user_text)
             telemetry = result.get("_telemetry", {})
-            _set_response_telemetry(span, telemetry)
-            if session.last_eval_final_response_id:
-                span.set_attribute(
-                    "lucy.eval.final_response_id",
-                    session.last_eval_final_response_id,
-                )
-            if _content_recording_enabled():
-                span.set_attribute(
-                    "eval.agent_response",
-                    _truncate_span_value(result.get("text", "")),
-                )
-                span.set_attribute(
-                    "eval.tools_used",
-                    _truncate_span_value(result.get("tool_outputs", [])),
-                )
             span.set_status(Status(StatusCode.OK))
             record_response_metrics(
                 telemetry=telemetry,
@@ -598,10 +666,7 @@ async def run_response_v2(
             )
             return result
         except Exception as exc:
-            span.set_attribute("error.type", type(exc).__name__)
-            span.set_attribute("error.message", _truncate_span_value(str(exc)))
-            span.set_status(Status(StatusCode.ERROR, str(exc)))
-            span.record_exception(exc)
+            _annotate_error_span(span, exc)
             record_response_metrics(
                 telemetry=None,
                 duration_seconds=time.monotonic() - start_time,

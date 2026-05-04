@@ -447,8 +447,8 @@ class RunResponseV2Tests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(session.previous_response_id, "r-1")
         self.assertEqual(session.last_eval_final_response_id, "r-1")
 
-    async def test_hosted_span_gets_final_response_usage_and_model(self):
-        """Hosted create_agent span carries final model/usage for Foundry Monitor rollups."""
+    async def test_hosted_spans_get_final_response_usage_and_model(self):
+        """Hosted create_agent/chat spans carry model/usage for Foundry Monitor rollups."""
         fake_tracer = _FakeTracer()
         mock_client = _MockOpenAIClient([
             _MockResponse(
@@ -476,6 +476,8 @@ class RunResponseV2Tests(unittest.IsolatedAsyncioTestCase):
                 function_registry={},
             )
 
+        self.assertEqual([span.name for span in fake_tracer.spans], ["create_agent", "chat"])
+
         create_span = fake_tracer.spans[0]
         self.assertEqual(create_span.name, "create_agent")
         self.assertEqual(
@@ -493,6 +495,16 @@ class RunResponseV2Tests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(create_span.attributes["gen_ai.usage.input_tokens"], 11)
         self.assertEqual(create_span.attributes["gen_ai.usage.output_tokens"], 7)
         self.assertEqual(create_span.attributes["gen_ai.usage.total_tokens"], 18)
+
+        chat_span = fake_tracer.spans[1]
+        self.assertEqual(chat_span.attributes["operation"], "chat")
+        self.assertEqual(chat_span.attributes["gen_ai.operation.name"], "chat")
+        self.assertEqual(
+            chat_span.attributes["gen_ai.agent.id"],
+            "agent-lucy-hosted-ncus:13",
+        )
+        self.assertEqual(chat_span.attributes["gen_ai.response.id"], "r-final")
+        self.assertEqual(chat_span.attributes["gen_ai.usage.total_tokens"], 18)
 
     async def test_agent_reference_suppresses_explicit_reasoning_effort(self):
         """Gateway agent_reference calls must not inherit model-specific reasoning settings."""

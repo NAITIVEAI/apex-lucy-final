@@ -1017,6 +1017,79 @@ Follow-up:
 
 ---
 
+## Hosted Agent Operate workbook chat-span alignment 2026-05-04
+
+- Status: deployed and verified for Hosted v20 raw App Insights rows that match
+  the Foundry Operate/Application Analytics workbook query contract; native
+  Build Monitor project metrics still return zero and still need visual portal
+  proof before the dashboard gate can be called complete.
+- Summary:
+  - Inspected the live `ai.azure.com` Observability bundle and downloaded the
+    English `FoundryDashboard` workbook asset. Its Application Analytics tiles
+    filter `dependencies` on `cloud_RoleName` plus
+    `gen_ai.operation.name in ("chat", "process_thread_run",
+    "text_completion", "get_thread_run")`.
+  - Kept Lucy's existing `create_agent` span for Foundry custom-agent
+    correlation and added a nested `chat` span around the Responses loop so the
+    Operate workbook sees hosted inference-call rows without removing the
+    custom-agent correlation row.
+  - Built and pushed image
+    `agentlucyacrncus.azurecr.io/agent-lucy-hosted:hosted-pr2-20260504102638-operatechatspan`
+    (`sha256:f0315752ce921d9972863476b9aa6bb668fd7f0fd538f0241221ee35e7740bda`).
+  - Created `agent-lucy-hosted-ncus:19` first, but it was bad because the clone
+    script read the wrong SDK field and only carried two env vars. The SDK smoke
+    failed with HTTP 500, so v19 must not be used as the canary.
+  - Created `agent-lucy-hosted-ncus:20` from v18's full
+    `definition.environment_variables` set (`61` env keys), changing only the
+    image and `LUCY_OTEL_AGENT_VERSION=20`; v20 reached `active`.
+- Files changed:
+  - `agent/app/lucy_core/responses_loop.py`
+  - `agent/tests/test_lucy_responses_loop.py`
+  - `TASKS.md`
+  - `agent/hosted_agent/README.md`
+  - `state/refactor-ledger.md`
+- Research evidence:
+  - Microsoft Foundry custom-agent registration docs still require
+    `gen_ai.operation.name="create_agent"` plus canonical
+    `gen_ai.agent.id` / `gen_ai.agent.name` for custom-agent trace
+    correlation, so the existing outer span stayed in place.
+  - The live FoundryDashboard workbook asset used by `ai.azure.com` Application
+    Analytics filters inference tiles on `chat` / `process_thread_run` /
+    `text_completion` / `get_thread_run`, not `create_agent`.
+- Tests and live verification:
+  - `pytest -q agent/tests/test_lucy_responses_loop.py
+    agent/tests/test_lucy_runtime.py agent/tests/test_hosted_deploy_env.py`
+    -> `45 passed`.
+  - `python -m py_compile agent/app/lucy_core/responses_loop.py` -> passed.
+  - `git diff --check` -> passed.
+  - Hosted v20 smoke response id
+    `caresp_2fb55937c05798c300kxfQqrvat8JXYmHvNWqKUzsyX7mod9So`;
+    SDK `status=completed`, `error=None`, output
+    `Lucy hosted operate chat span online.`
+  - App Insights KQL after ingestion showed v20 `chat` dependency rows at
+    `2026-05-04T10:31:16Z`, `success=True`, `resultCode=0`,
+    `gen_ai.operation.name=chat`,
+    `gen_ai.agent.id=agent-lucy-hosted-ncus:20`,
+    `gen_ai.agent.version=20`, `gen_ai.response.model=gpt-5.2-chat`, and
+    `gen_ai.usage.total_tokens=4810`.
+  - Workbook-shaped KQL over the last 30 minutes returned
+    `cloud_RoleName=agent-lucy-hosted-ncus`, `name=chat`, `rows=2`,
+    `tokens=9620`, latest `2026-05-04T10:31:16Z`.
+  - Direct Azure Monitor project metrics over the last 45 minutes still returned
+    `0` totals for `AgentResponses`, `AgentInputTokens`, `AgentOutputTokens`,
+    `AgentRuns`, and `AgentToolCalls` in namespace
+    `microsoft.cognitiveservices/accounts/projects`.
+- Blockers / follow-ups:
+  - Native visual proof is still required. App/browser auth was unavailable in
+    this session, so the Operate dashboard was verified by the exact workbook
+    KQL contract, not by a fresh screenshot.
+  - Do not use Hosted v19; v20 is the current canary.
+  - Do not mark the dashboard acceptance gate complete until a signed-in
+    Foundry visual check confirms the Operate/Application Analytics view shows
+    the v20 `chat` traffic and/or the Build Monitor cards leave zero state.
+
+---
+
 ## Completed Plans
 
 _none yet_

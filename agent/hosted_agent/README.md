@@ -39,10 +39,10 @@ launch attempt. The current Hosted Agent canary is in North Central US:
   `https://agent-lucy-foundry-ncus.services.ai.azure.com/api/projects/agent-lucy-prj-ncus`
 - ACR: `agentlucyacrncus.azurecr.io`
 - Model deployment: `gpt-5.2-chat`
-- Hosted Agent: `agent-lucy-hosted-ncus:18`
+- Hosted Agent: `agent-lucy-hosted-ncus:20`
 - Inner prompt agent: `agent-lucy-prod:6`
 - Hosted image:
-  `agentlucyacrncus.azurecr.io/agent-lucy-hosted:hosted-pr2-20260504094430-foundrymetricdims`
+  `agentlucyacrncus.azurecr.io/agent-lucy-hosted:hosted-pr2-20260504102638-operatechatspan`
 
 The basic SDK smoke is green:
 
@@ -70,22 +70,22 @@ Expected smoke result: `completed None` with a short Lucy response.
   outer hosted request and dependencies for `create_agent`,
   `invoke_agent agent-lucy-prod:6`, `execute_tool`, and the
   `gpt-5.2-chat-2025-12-11` model call.
-- Version 18 response creation is green for Hosted wrapper
+- Version 20 response creation is green for Hosted wrapper
   response ids. The adapter keeps Hosted `caresp_...` / `conv_...` identifiers
   as Foundry metadata but does not forward them as inner prompt-agent
   conversation state.
-- A fresh monitor-verification SDK smoke on 2026-05-04 returned
-  `caresp_a07125974af2ed6900vmHmvxhbte6i5KGRazOK1OcskevV5VWq`,
+- A fresh Operate telemetry SDK smoke on 2026-05-04 returned
+  `caresp_2fb55937c05798c300kxfQqrvat8JXYmHvNWqKUzsyX7mod9So`,
   `status=completed`, `error=None`, and output
-  `Lucy hosted monitor smoke online.`
+  `Lucy hosted operate chat span online.`
 - Version 13 target evaluation completed successfully with output text, model
   usage, and `passed=1`, `failed=0`, `errored=0`:
   `evalrun_b03b7e0521e642c6986d3e84e10b65a3`.
-- Version 18 telemetry confirms canonical agent dimensions on hosted request,
-  `create_agent`, and model/tool rows:
+- Version 20 telemetry confirms canonical agent dimensions on hosted request,
+  `create_agent`, `chat`, and model/tool rows:
   `gen_ai.agent.name=agent-lucy-hosted-ncus`,
-  `gen_ai.agent.id=agent-lucy-hosted-ncus:18`, and
-  `gen_ai.agent.version=18`. Hosted `create_agent` rows also carry
+  `gen_ai.agent.id=agent-lucy-hosted-ncus:20`, and
+  `gen_ai.agent.version=20`. Hosted `create_agent` and `chat` rows also carry
   `gen_ai.provider.name=azure.ai.foundry`,
   `gen_ai.response.model=gpt-5.2-chat`, and populated
   `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`, and
@@ -94,15 +94,17 @@ Expected smoke result: `completed None` with a short Lucy response.
   Hosted agent, model, and Foundry project dimensions. The stale custom
   `gen_ai.agents.id=lucy-aca` dimension is no longer emitted by Lucy's custom
   response loop.
-- Version 18 also carries the explicit AI Search project connection ID and
+- Version 20 also carries the explicit AI Search project connection ID and
   disables Chainlit-only dashboard route registration in the Hosted process.
-- Version 18 aligns `MODEL_DEPLOYMENT_NAME`, `AZURE_AGENT_MODEL`, and
+- Version 20 aligns `MODEL_DEPLOYMENT_NAME`, `AZURE_AGENT_MODEL`, and
   `AZURE_GPT_MODEL` to `gpt-5.2-chat`; `MODEL_DEPLOYMENT_NAME` wins in Lucy's
   code path, so leaving it at base `gpt-5.2` silently routes the inner prompt
   agent to the wrong model lane.
-- The native Foundry Monitor tab still shows `$0` and `Total token usage 0`
-  after v18 traffic. The page's own cost API returns hosted token totals for
-  v18, but its Azure Monitor project metrics calls still return empty
+- The Operate/Application Analytics workbook-shaped KQL now returns non-zero
+  Hosted `chat` rows/tokens from App Insights. The older native Build Monitor
+  project metrics path still shows `$0` and `Total token usage 0` after v20
+  traffic. The page's own cost API returns hosted token totals, but its Azure
+  Monitor project metrics calls still return empty
   or zero `AgentResponses`, `AgentInputTokens`, `AgentOutputTokens`,
   `AgentRuns`, and `AgentToolCalls` timeseries even after fresh SDK traffic.
   The current COO-safe fallback is the Azure Monitor workbook
