@@ -201,9 +201,11 @@ async def request_to_lucy_request(request: Any, context: Any) -> LucyRequest:
     foundry_conversation_id = _conversation_id_from(request, context, metadata)
     foundry_previous_response_id = _previous_response_id_from(request, context, metadata)
     inner_conversation_id = lucy_session_meta.get("conversation_id")
-    inner_previous_response_id = _inner_response_id(
-        lucy_session_meta.get("previous_response_id")
-    ) or _inner_response_id(foundry_previous_response_id)
+    inner_previous_response_id = (
+        _inner_response_id(lucy_session_meta.get("previous_response_id"))
+        or _inner_response_id(request.previous_response_id)
+        or _inner_response_id(foundry_previous_response_id)
+    )
     session = LucySession(
         session_id=_session_id_from(context, metadata, foundry_conversation_id),
         conversation_id=inner_conversation_id,
