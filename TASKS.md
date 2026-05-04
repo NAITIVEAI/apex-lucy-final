@@ -1,11 +1,11 @@
 # TASKS.md
 
-Current state: **prestable, barely**. Lucy Hosted v15 is running and raw App Insights telemetry now has hosted `create_agent` model/token usage, but the native Foundry Monitor tab still shows zero usage. Use the KQL-backed COO workbook until the preview dashboard aggregation path catches up or Microsoft resolves it.
+Current state: **prestable, barely**. Lucy Hosted v18 is running and raw App Insights telemetry now has hosted `create_agent` model/token usage plus GenAI client metrics, but the native Foundry Monitor cards still show zero usage. Use the KQL-backed COO workbook until the preview project-metrics aggregation path catches up or Microsoft resolves it.
 
 ## Read This First
 
 - [ ] Start with `/state/refactor-ledger.md`, especially the `Hosted Agent RBAC/search/dashboard cleanup 2026-04-29` section.
-- [ ] Treat `agent-lucy-hosted-ncus:15` as the current Hosted canary.
+- [ ] Treat `agent-lucy-hosted-ncus:18` as the current Hosted canary.
 - [ ] Treat `agent-lucy-eus2` as the current member-facing Chainlit runtime.
 - [ ] Do not delete or disable the EUS2 gateway/APIM bridge until Hosted proves full production parity.
 - [ ] Use raw App Insights KQL and the `Lucy Hosted COO Monitor` workbook as the current evidence path. The native Foundry Monitor tab is still not populated/reliable.
@@ -18,12 +18,12 @@ Current state: **prestable, barely**. Lucy Hosted v15 is running and raw App Ins
   - App Insights: `agent-lucy-appins-eus2`
 - [x] Hosted Agent canary is in North Central US:
   - Foundry account/project: `agent-lucy-foundry-ncus` / `agent-lucy-prj-ncus`
-  - Hosted Agent: `agent-lucy-hosted-ncus:15`
-  - ACR image: `agentlucyacrncus.azurecr.io/agent-lucy-hosted:hosted-pr2-20260504090635-otelkind`
+  - Hosted Agent: `agent-lucy-hosted-ncus:18`
+  - ACR image: `agentlucyacrncus.azurecr.io/agent-lucy-hosted:hosted-pr2-20260504094430-foundrymetricdims`
   - Model deployment: `gpt-5.2-chat`
   - Inner prompt agent: `agent-lucy-prod:6`
-- [x] Hosted v15 smoke passed:
-  - Response ids: `caresp_80974b8a0367e54500usMJx1drNCMu1Ejne4LRdACjJW5ZlnVp`, `caresp_1ef403146a2ebc4700f0wXyuOGbTUYAZpeSfemnH3mfyGJLwke`, `caresp_e4833a4a0308afcd0028IggFVsUwtFSwxk2jHIKfZMRRpOE9ur`
+- [x] Hosted v18 smoke passed:
+  - Response ids: `caresp_6e3cef1977800ae8001mKvC6cTbwaufx0M38O9OaTg685nkgNU`, `caresp_2abfdd0d9cda8e7e00HgyEXzdoZhd211nSW7bHFzxkeMG3uEDf`, `caresp_9d6af8231fea912200m0bdCxUuf9yyXpimyhR961t0Rpe4Ber7`
   - SDK status: `completed`
   - Error: `None`
 - [x] Hosted v13 response retrieval passed for the same `caresp_...` id; the
@@ -33,13 +33,14 @@ Current state: **prestable, barely**. Lucy Hosted v15 is running and raw App Ins
   - Eval run: `evalrun_b03b7e0521e642c6986d3e84e10b65a3`
   - Output text: `The Lucy-hosted Target Evaluation v13 chat is now online.`
   - Result counts: `passed=1`, `failed=0`, `errored=0`
-- [x] Hosted v15 telemetry carries canonical agent attributes, provider, model, and token usage on hosted `create_agent` rows:
+- [x] Hosted v18 telemetry carries canonical agent attributes, provider, model, token usage, and GenAI client metrics:
   - `gen_ai.agent.name=agent-lucy-hosted-ncus`
-  - `gen_ai.agent.id=agent-lucy-hosted-ncus:15`
-  - `gen_ai.agent.version=15`
+  - `gen_ai.agent.id=agent-lucy-hosted-ncus:18`
+  - `gen_ai.agent.version=18`
   - `gen_ai.provider.name=azure.ai.foundry`
   - `gen_ai.response.model=gpt-5.2-chat`
   - `gen_ai.usage.total_tokens` populated on the hosted `create_agent` span
+  - `gen_ai.client.token.usage` and `gen_ai.client.operation.duration` exported to App Insights custom metrics
 - [x] KQL-backed COO workbook exists:
   - Display name: `Lucy Hosted COO Monitor`
   - Resource: `/subscriptions/22f9f915-587f-4a9a-acff-69b061ef48e1/resourcegroups/agent-lucy-eus2/providers/microsoft.insights/workbooks/d93d5898-c385-40ff-978e-eea3dbf03332`
@@ -55,7 +56,7 @@ Current state: **prestable, barely**. Lucy Hosted v15 is running and raw App Ins
 
 ## What Still Needs Work
 
-- [ ] Native Foundry Monitor still needs Microsoft/portal aggregation closure. Current status after v15: App Insights has valid hosted `create_agent` usage rows, but the agent Monitor tab still shows `$0` and `Total token usage 0`.
+- [ ] Native Foundry Monitor still needs Microsoft/portal aggregation closure. Current status after v18: App Insights has valid hosted `create_agent` usage rows and GenAI client metrics, and the Foundry cost API returns hosted token totals, but the Monitor cards still show `$0` and `Total token usage 0` because the project metrics namespace returns empty `AgentResponses` / `AgentInputTokens` series.
 - [x] Build a COO-safe dashboard fallback using KQL/custom workbook while the preview ops dashboard remains flaky.
 - [ ] Re-test Hosted-targeted continuous evaluation after v15 traffic. A one-off Hosted target eval passed on 2026-05-03 for v13, but the old continuous response-eval rule has not yet produced a fresh post-v15 run.
 - [ ] Run a real Hosted canary for the notice path:
@@ -76,7 +77,7 @@ Current state: **prestable, barely**. Lucy Hosted v15 is running and raw App Ins
 ## Next Agent Plan
 
 - [x] First, verify live v13 telemetry with KQL before editing code.
-- [x] Second, generate 3-5 Hosted v15 smoke calls and wait a few minutes for portal lag.
+- [x] Second, generate 3-5 Hosted v18 smoke calls and wait a few minutes for portal lag.
 - [ ] Third, check these surfaces in order:
   - Foundry Agent metrics for `agent-lucy-hosted-ncus`
   - App Insights raw traces/dependencies/requests
@@ -84,4 +85,4 @@ Current state: **prestable, barely**. Lucy Hosted v15 is running and raw App Ins
   - continuous eval runs
 - [x] Fourth, if main ops dashboard is still blank but raw telemetry and Agent metrics are present, treat it as a portal/workbook issue and create a custom KQL workbook for the COO demo.
 - [ ] Fifth, after the workbook fallback is reviewed as acceptable, test full notice-auth-PDF-HITL parity through Hosted.
-- [ ] Sixth, write the result back to `/state/refactor-ledger.md` with exact resource names, response ids, KQL evidence, and remaining blockers.
+- [x] Sixth, write the result back to `/state/refactor-ledger.md` with exact resource names, response ids, KQL evidence, and remaining blockers.

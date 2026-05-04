@@ -9,10 +9,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "agent" / "app"))
 
 from lucy_core.responses_loop import (
     _apply_request_reasoning,
+    _metric_instruments,
     build_authenticated_state_items,
     collect_response_telemetry,
     execute_v2_tool_call,
     extract_v2_function_calls,
+    record_response_metrics,
     run_response_v2,
 )
 from lucy_core.session import LucySession
@@ -354,6 +356,57 @@ class _FakeTracer:
         span.kwargs = kwargs
         self.spans.append(span)
         return span
+
+
+class _FakeHistogram:
+    def __init__(self):
+        self.records = []
+
+    def record(self, value, attributes=None):
+        self.records.append((value, dict(attributes or {})))
+
+
+class _FakeMeter:
+    def __init__(self):
+        self.histograms = {}
+
+    def create_histogram(self, name, unit=None, description=None):
+        histogram = _FakeHistogram()
+        self.histograms[name] = histogram
+        return histogram
+
+
+class ResponseMetricTests(unittest.TestCase):
+    def test_records_genai_duration_and_token_usage_metrics(self):
+        fake_meter = _FakeMeter()
+        _metric_instruments.clear()
+        telemetry = {
+            "gen_ai.response.model": "gpt-5.2-chat",
+            "gen_ai.usage.input_tokens": 11,
+            "gen_ai.usage.output_tokens": 7,
+        }
+        with patch("lucy_core.responses_loop._metric_meter", fake_meter):
+            record_response_metrics(
+                telemetry=telemetry,
+                duration_seconds=1.25,
+                request_model="gpt-5.2-chat",
+                otel_agent_id="agent-lucy-hosted-ncus:16",
+                otel_agent_version="16",
+            )
+
+        duration = fake_meter.histograms["gen_ai.client.operation.duration"]
+        self.assertEqual(duration.records[0][0], 1.25)
+        self.assertEqual(
+            duration.records[0][1]["gen_ai.agent.id"],
+            "agent-lucy-hosted-ncus:16",
+        )
+        self.assertEqual(duration.records[0][1]["gen_ai.provider.name"], "azure.ai.foundry")
+
+        usage = fake_meter.histograms["gen_ai.client.token.usage"]
+        self.assertEqual(
+            [(value, attrs["gen_ai.token.type"]) for value, attrs in usage.records],
+            [(11, "input"), (7, "output")],
+        )
 
 
 class RunResponseV2Tests(unittest.IsolatedAsyncioTestCase):

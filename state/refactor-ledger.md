@@ -899,6 +899,110 @@ Follow-up:
 
 ---
 
+## Hosted Agent GenAI metric export and native Monitor blocker 2026-05-04
+
+- Status: deployed and verified for Hosted v18 raw spans, raw metrics, and
+  Foundry cost API token extraction; native Foundry Monitor cards remain
+  blocked by the project metrics namespace.
+- Summary:
+  - Added GenAI client metric export from Lucy's Responses loop using a
+    dedicated Azure Monitor metric exporter, leaving the working trace/export
+    path unchanged.
+  - Exported `gen_ai.client.operation.duration` and
+    `gen_ai.client.token.usage` with Hosted agent identity, version, request
+    model, response model, token type, and Foundry project id dimensions.
+  - Parsed `AI_SEARCH_PROJECT_CONNECTION_ID` to derive the current Foundry
+    project ARM id for metric correlation without hardcoding a project path.
+  - Built and pushed:
+    - v16 image
+      `agentlucyacrncus.azurecr.io/agent-lucy-hosted:hosted-pr2-20260504092413-genaimetrics`
+      (`sha256:65a125a43eab408f20c7551fbf40d3c45e5fa1a8ca4c3c869d502be5b6af4c83`)
+    - v17 image
+      `agentlucyacrncus.azurecr.io/agent-lucy-hosted:hosted-pr2-20260504093323-genaimetricexporter`
+      (`sha256:4159a6ec22372cd1c21439625df12e54c0e4fea96b2814273451d81f27435be6`)
+    - v18 image
+      `agentlucyacrncus.azurecr.io/agent-lucy-hosted:hosted-pr2-20260504094430-foundrymetricdims`
+      (`sha256:3cca0f566ba2d65a120de5a92a0d7b35ceba83b7ad7e3efa80667ee158f8c58c`)
+  - Created Hosted Agent versions `agent-lucy-hosted-ncus:16`,
+    `agent-lucy-hosted-ncus:17`, and `agent-lucy-hosted-ncus:18` by cloning
+    the prior Hosted environment and changing only image plus
+    `LUCY_OTEL_AGENT_VERSION`.
+- Files changed:
+  - `agent/app/lucy_core/responses_loop.py`
+  - `agent/tests/test_lucy_responses_loop.py`
+  - `TASKS.md`
+  - `agent/hosted_agent/README.md`
+  - `state/refactor-ledger.md`
+- Research evidence:
+  - Microsoft Foundry Agent Monitoring Dashboard docs, updated 2026-04-30:
+    the Monitor dashboard reads telemetry from the App Insights resource linked
+    to the Foundry project, and empty charts can mean no recent traffic,
+    excluded time range, or ingestion delay.
+  - Microsoft Foundry custom-agent registration docs: Foundry correlates
+    custom-agent traces through `gen_ai.operation.name="create_agent"` plus
+    `gen_ai.agent.id` or `gen_ai.agent.name` matching the configured OpenTelemetry
+    agent id.
+  - Microsoft Azure Monitor OpenTelemetry exporter docs: Python apps can
+    instantiate `AzureMonitorMetricExporter`, attach it through
+    `PeriodicExportingMetricReader`, and record metrics through SDK instruments.
+  - OpenTelemetry GenAI metric conventions: `gen_ai.client.operation.duration`
+    and `gen_ai.client.token.usage` are the current client-side GenAI metric
+    names, with token usage split by `gen_ai.token.type`.
+- Tests and live verification:
+  - `pytest -q agent/tests/test_lucy_responses_loop.py agent/tests/test_lucy_runtime.py`
+    -> `41 passed`.
+  - `python -m py_compile agent/app/lucy_core/responses_loop.py` -> passed.
+  - `git diff --check` -> passed.
+  - Hosted v16 smoke response ids:
+    `caresp_ac455edd8be2fe1100IsCDBdbZCw4aoIICi5znV7evozkImKnD`,
+    `caresp_b55e4d993821a89800sy3nayAJrQngrhLBqI66k4IMv9faB0lw`,
+    `caresp_cd0cdabb0ea113b100weS70Sy3zDnF1ftHdH6rZO17267EjK1G`;
+    all `status=completed`.
+  - Hosted v17 smoke response ids:
+    `caresp_cf38c082835d12d8005E32V9tJwRlq13dZ9V7SXoXUbFC4x82Z`,
+    `caresp_7053b2f1d61b105900Bxns4Gxsntaz6qFX5sacWM9bu7eaun25`,
+    `caresp_ab8c86dcba9bda5f00FHFRmici0GKm6gOiZpj3lqGiaNilwoef`;
+    all `status=completed`.
+  - Hosted v18 smoke response ids:
+    `caresp_6e3cef1977800ae8001mKvC6cTbwaufx0M38O9OaTg685nkgNU`,
+    `caresp_2abfdd0d9cda8e7e00HgyEXzdoZhd211nSW7bHFzxkeMG3uEDf`,
+    `caresp_9d6af8231fea912200m0bdCxUuf9yyXpimyhR961t0Rpe4Ber7`;
+    all `status=completed`.
+  - App Insights KQL for Hosted v17 custom metrics showed
+    `gen_ai.client.token.usage` and `gen_ai.client.operation.duration` rows
+    for `agent-lucy-hosted-ncus`, `gen_ai.agent.version=17`,
+    `gen_ai.request.model=gpt-5.2-chat`, `gen_ai.response.model=gpt-5.2-chat`,
+    and input/output token dimensions.
+  - Foundry Monitor network capture after v18 showed the page's own
+    `listBatchCostMetricsData` response returning token totals for Hosted
+    versions, including `totalTokens=57296` for
+    `agent-lucy-hosted-ncus:18`, and an aggregate `totalTokens=284960` across
+    hosted versions 14-18.
+  - The same page's Azure Monitor project metrics requests against namespace
+    `microsoft.cognitiveservices/accounts/projects` returned empty timeseries
+    for `AgentResponses`, `AgentInputTokens`, and `AgentToolCalls`.
+  - Foundry Monitor screenshots after v17 and v18 still show `Estimated cost
+    $0` / `--` and `Total token usage 0`:
+    `/tmp/foundry_agent_v17_monitor.png`,
+    `/tmp/foundry_agent_v17_monitor_7D.png`,
+    `/tmp/foundry_agent_v17_monitor_1M.png`,
+    `/tmp/foundry_agent_v18_monitor.png`, and
+    `/tmp/foundry_agent_v18_monitor_after_cost.png`.
+- Blockers / follow-ups:
+  - Native Foundry Monitor cards are now blocked on Microsoft/project-metrics
+    aggregation, not Lucy runtime telemetry. The page can extract hosted token
+    totals from App Insights via its cost API, but the operational cards are
+    driven by project metrics that remain empty.
+  - Keep using raw App Insights KQL and `Lucy Hosted COO Monitor` for demo/COO
+    evidence until `AgentResponses` / `AgentInputTokens` populate in the
+    `microsoft.cognitiveservices/accounts/projects` metrics namespace.
+  - Do not mark the Hosted/Foundry dashboard acceptance gate complete until the
+    native Monitor cards visually show non-zero usage.
+  - Full notice-auth-PDF-HITL canary remains pending after observability
+    fallback acceptance.
+
+---
+
 ## Completed Plans
 
 _none yet_

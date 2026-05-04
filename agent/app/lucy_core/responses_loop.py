@@ -22,6 +22,7 @@ import inspect
 import json
 import logging
 import os
+import time
 import uuid
 from typing import Any, Optional
 
@@ -40,6 +41,9 @@ from opentelemetry import trace as _otel_trace
 from opentelemetry.trace import SpanKind, Status, StatusCode
 
 _tracer = _otel_trace.get_tracer("lucy_core.responses_loop")
+_metric_meter: Any | None = None
+_metric_provider: Any | None = None
+_metric_instruments: dict[str, Any] = {}
 
 logger = logging.getLogger(__name__)
 
@@ -165,6 +169,168 @@ def _set_response_telemetry(span: Any, telemetry: dict[str, Any]) -> None:
     for key, value in telemetry.items():
         if value is not None:
             span.set_attribute(key, value)
+
+
+def _otel_resource_attributes() -> dict[str, str]:
+    attributes: dict[str, str] = {}
+    for item in os.getenv("OTEL_RESOURCE_ATTRIBUTES", "").split(","):
+        if "=" not in item:
+            continue
+        key, value = item.split("=", 1)
+        key = key.strip()
+        if key:
+            attributes[key] = value.strip()
+    return attributes
+
+
+def _foundry_project_id() -> str:
+    for key in (
+        "MICROSOFT_FOUNDRY_PROJECT_ID",
+        "AZURE_AI_FOUNDRY_PROJECT_ID",
+        "AZURE_AI_PROJECT_ID",
+    ):
+        value = os.getenv(key, "").strip()
+        if value:
+            return value
+
+    connection_id = os.getenv("AI_SEARCH_PROJECT_CONNECTION_ID", "").strip()
+    marker = "/connections/"
+    if marker in connection_id:
+        return connection_id.split(marker, 1)[0]
+    return ""
+
+
+def _genai_metric_meter() -> Any | None:
+    """Return a dedicated Azure Monitor meter for GenAI dashboard metrics."""
+    global _metric_meter, _metric_provider
+    if _metric_meter is not None:
+        return _metric_meter
+
+    connection_string = os.getenv("APPLICATIONINSIGHTS_CONNECTION_STRING", "").strip()
+    if not connection_string:
+        return None
+
+    try:
+        from azure.monitor.opentelemetry.exporter import AzureMonitorMetricExporter
+        from opentelemetry.sdk.metrics import MeterProvider
+        from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
+        from opentelemetry.sdk.resources import Resource, SERVICE_NAME, SERVICE_VERSION
+    except Exception:
+        logger.debug("Azure Monitor metric exporter unavailable", exc_info=True)
+        return None
+
+    resource_values = {
+        SERVICE_NAME: os.getenv("OTEL_SERVICE_NAME", "lucy-hosted-agent"),
+        SERVICE_VERSION: os.getenv("LUCY_VERSION", "1.0.0"),
+    }
+    resource_values.update(_otel_resource_attributes())
+    project_id = _foundry_project_id()
+    if project_id:
+        resource_values["microsoft.foundry.project.id"] = project_id
+    resource = Resource.create(resource_values)
+    try:
+        interval_ms = int(os.getenv("LUCY_GENAI_METRIC_EXPORT_INTERVAL_MS", "5000"))
+    except ValueError:
+        interval_ms = 5000
+    reader = PeriodicExportingMetricReader(
+        AzureMonitorMetricExporter(connection_string=connection_string),
+        export_interval_millis=interval_ms,
+    )
+    _metric_provider = MeterProvider(resource=resource, metric_readers=[reader])
+    _metric_meter = _metric_provider.get_meter("lucy_core.responses_loop")
+    return _metric_meter
+
+
+def _histogram(name: str, *, unit: str, description: str) -> Any | None:
+    instrument = _metric_instruments.get(name)
+    if instrument is None:
+        meter = _genai_metric_meter()
+        if meter is None:
+            return None
+        instrument = meter.create_histogram(name, unit=unit, description=description)
+        _metric_instruments[name] = instrument
+    return instrument
+
+
+def _metric_attributes(
+    *,
+    operation: str,
+    provider: str,
+    request_model: str,
+    telemetry: dict[str, Any] | None,
+    otel_agent_id: str,
+    otel_agent_version: str,
+) -> dict[str, Any]:
+    attributes: dict[str, Any] = {
+        "gen_ai.operation.name": operation,
+        "gen_ai.provider.name": provider,
+        "gen_ai.agent.id": otel_agent_id,
+        "gen_ai.agent.name": otel_agent_id.split(":", 1)[0],
+    }
+    if otel_agent_version:
+        attributes["gen_ai.agent.version"] = otel_agent_version
+    if request_model:
+        attributes["gen_ai.request.model"] = request_model
+    project_id = _foundry_project_id()
+    if project_id:
+        attributes["microsoft.foundry.project.id"] = project_id
+    response_model = (telemetry or {}).get("gen_ai.response.model")
+    if response_model:
+        attributes["gen_ai.response.model"] = response_model
+    return attributes
+
+
+def record_response_metrics(
+    *,
+    telemetry: dict[str, Any] | None,
+    duration_seconds: float,
+    request_model: str,
+    otel_agent_id: str,
+    otel_agent_version: str,
+    error_type: str | None = None,
+) -> None:
+    """Emit GenAI metrics used by Azure Monitor/Foundry agent dashboards."""
+    try:
+        attributes = _metric_attributes(
+            operation="create_agent",
+            provider="azure.ai.foundry",
+            request_model=request_model,
+            telemetry=telemetry,
+            otel_agent_id=otel_agent_id,
+            otel_agent_version=otel_agent_version,
+        )
+        if error_type:
+            attributes["error.type"] = error_type
+
+        duration_histogram = _histogram(
+            "gen_ai.client.operation.duration",
+            unit="s",
+            description="GenAI operation duration.",
+        )
+        if duration_histogram is not None:
+            duration_histogram.record(max(duration_seconds, 0.0), attributes)
+
+        token_histogram = _histogram(
+            "gen_ai.client.token.usage",
+            unit="{token}",
+            description="Number of input and output tokens used.",
+        )
+        if token_histogram is None:
+            return
+        input_tokens = (telemetry or {}).get("gen_ai.usage.input_tokens")
+        if input_tokens is not None:
+            token_histogram.record(
+                input_tokens,
+                {**attributes, "gen_ai.token.type": "input"},
+            )
+        output_tokens = (telemetry or {}).get("gen_ai.usage.output_tokens")
+        if output_tokens is not None:
+            token_histogram.record(
+                output_tokens,
+                {**attributes, "gen_ai.token.type": "output"},
+            )
+    except Exception:
+        logger.debug("Failed to record GenAI response metrics", exc_info=True)
 
 
 def _get_otel_agent_version(otel_agent_id: str) -> str:
@@ -370,6 +536,7 @@ async def run_response_v2(
     """
     otel_agent_id = os.getenv("LUCY_OTEL_AGENT_ID", "lucy-aca")
     request_model = _get_model_deployment_name() or agent_name
+    start_time = time.monotonic()
     span_attributes = {
         "operation": "create_agent",
         "gen_ai.operation.name": "create_agent",
@@ -405,7 +572,8 @@ async def run_response_v2(
             span.set_attribute("tools_used", json.dumps([
                 item.get("name", "") for item in result.get("tool_outputs", [])
             ]))
-            _set_response_telemetry(span, result.get("_telemetry", {}))
+            telemetry = result.get("_telemetry", {})
+            _set_response_telemetry(span, telemetry)
             if session.last_eval_final_response_id:
                 span.set_attribute(
                     "lucy.eval.final_response_id",
@@ -421,12 +589,27 @@ async def run_response_v2(
                     _truncate_span_value(result.get("tool_outputs", [])),
                 )
             span.set_status(Status(StatusCode.OK))
+            record_response_metrics(
+                telemetry=telemetry,
+                duration_seconds=time.monotonic() - start_time,
+                request_model=request_model,
+                otel_agent_id=otel_agent_id,
+                otel_agent_version=otel_agent_version,
+            )
             return result
         except Exception as exc:
             span.set_attribute("error.type", type(exc).__name__)
             span.set_attribute("error.message", _truncate_span_value(str(exc)))
             span.set_status(Status(StatusCode.ERROR, str(exc)))
             span.record_exception(exc)
+            record_response_metrics(
+                telemetry=None,
+                duration_seconds=time.monotonic() - start_time,
+                request_model=request_model,
+                otel_agent_id=otel_agent_id,
+                otel_agent_version=otel_agent_version,
+                error_type=type(exc).__name__,
+            )
             raise
 
 
