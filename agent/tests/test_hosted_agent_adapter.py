@@ -21,6 +21,11 @@ class _FakeRequest:
         self.conversation = conversation
 
 
+class _RequestWithoutPreviousResponseId:
+    metadata = {}
+    conversation = None
+
+
 class _FakeIsolation:
     chat_key = "chat-key-1"
 
@@ -145,10 +150,18 @@ class HostedRequestMappingTests(unittest.IsolatedAsyncioTestCase):
 
         lucy_request = await request_to_lucy_request(
             request,
-            _FakeContext(previous_response_id=None),
+            _FakeContext(previous_response_id="caresp-prev"),
         )
 
         self.assertEqual(lucy_request.session.previous_response_id, "resp_inner_prev")
+
+    async def test_request_without_previous_response_id_attribute_is_safe(self):
+        lucy_request = await request_to_lucy_request(
+            _RequestWithoutPreviousResponseId(),
+            _FakeContext(previous_response_id="caresp-prev"),
+        )
+
+        self.assertIsNone(lucy_request.session.previous_response_id)
 
     async def test_hosted_wrapper_response_id_is_not_forwarded_to_inner_agent(self):
         request = _FakeRequest(previous_response_id="caresp-prev")

@@ -147,7 +147,7 @@ def _inner_response_id(value: Any) -> str | None:
     if not value:
         return None
     response_id = str(value)
-    if response_id.startswith("resp_") and not response_id.startswith("caresp_"):
+    if response_id.startswith("resp_"):
         return response_id
     return None
 
@@ -200,10 +200,14 @@ async def request_to_lucy_request(request: Any, context: Any) -> LucyRequest:
     lucy_session_meta = _as_mapping(metadata.get("lucy_session"))
     foundry_conversation_id = _conversation_id_from(request, context, metadata)
     foundry_previous_response_id = _previous_response_id_from(request, context, metadata)
+    request_previous_response_id = (
+        getattr(request, "previous_response_id", None)
+        or _as_mapping(request).get("previous_response_id")
+    )
     inner_conversation_id = lucy_session_meta.get("conversation_id")
     inner_previous_response_id = (
         _inner_response_id(lucy_session_meta.get("previous_response_id"))
-        or _inner_response_id(request.previous_response_id)
+        or _inner_response_id(request_previous_response_id)
         or _inner_response_id(foundry_previous_response_id)
     )
     session = LucySession(
