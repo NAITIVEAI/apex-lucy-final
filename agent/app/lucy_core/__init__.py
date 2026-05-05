@@ -19,7 +19,6 @@ from .errors import (
     SessionStateError,
     ToolExecutionError,
 )
-from .runtime import LucyRuntime
 from .session import LucyArtifact, LucyRequest, LucyResponse, LucySession
 
 __all__ = [
@@ -33,3 +32,11 @@ __all__ = [
     "SessionStateError",
     "ToolExecutionError",
 ]
+
+
+def __getattr__(name: str):
+    if name == "LucyRuntime":
+        from .runtime import LucyRuntime
+
+        return LucyRuntime
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

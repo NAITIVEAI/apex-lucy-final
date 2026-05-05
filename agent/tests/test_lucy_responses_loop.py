@@ -9,9 +9,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "agent" / "app"))
 
 from lucy_core.responses_loop import (
     _apply_request_reasoning,
+    _metric_instruments,
     build_authenticated_state_items,
+    collect_response_telemetry,
     execute_v2_tool_call,
     extract_v2_function_calls,
+    record_response_metrics,
     run_response_v2,
 )
 from lucy_core.session import LucySession
@@ -25,12 +28,16 @@ class _MockResponse:
         output_text="",
         conversation=None,
         conversation_id=None,
+        model=None,
+        usage=None,
     ):
         self.id = response_id
         self.output = output if output is not None else []
         self.output_text = output_text
         self.conversation = conversation
         self.conversation_id = conversation_id
+        self.model = model
+        self.usage = usage
 
 
 class _MockOpenAIClient:
@@ -278,6 +285,130 @@ class ExecuteV2ToolCallTests(unittest.TestCase):
         self.assertEqual(parsed["result"], "<opaque>")
 
 
+class CollectResponseTelemetryTests(unittest.TestCase):
+    class _Usage:
+        input_tokens = 10
+        output_tokens = 5
+        total_tokens = 15
+
+    def test_collects_attr_response_usage(self):
+        response = _MockResponse(
+            response_id="r-usage",
+            model="gpt-5.2-chat-2025-12-11",
+            usage=self._Usage(),
+        )
+        self.assertEqual(
+            collect_response_telemetry(response),
+            {
+                "gen_ai.response.id": "r-usage",
+                "gen_ai.response.model": "gpt-5.2-chat-2025-12-11",
+                "gen_ai.usage.input_tokens": 10,
+                "gen_ai.usage.output_tokens": 5,
+                "gen_ai.usage.total_tokens": 15,
+            },
+        )
+
+    def test_collects_dict_usage_and_sums_total_when_missing(self):
+        response = {
+            "id": "r-dict",
+            "model": "gpt-5.2-chat-2025-12-11",
+            "usage": {"prompt_tokens": "4", "completion_tokens": "6"},
+        }
+        self.assertEqual(
+            collect_response_telemetry(response),
+            {
+                "gen_ai.response.id": "r-dict",
+                "gen_ai.response.model": "gpt-5.2-chat-2025-12-11",
+                "gen_ai.usage.input_tokens": 4,
+                "gen_ai.usage.output_tokens": 6,
+                "gen_ai.usage.total_tokens": 10,
+            },
+        )
+
+
+class _FakeSpan:
+    def __init__(self, name, attributes):
+        self.name = name
+        self.attributes = dict(attributes or {})
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+    def set_attribute(self, key, value):
+        self.attributes[key] = value
+
+    def set_status(self, status):
+        self.status = status
+
+    def record_exception(self, exc):
+        self.exception = exc
+
+
+class _FakeTracer:
+    def __init__(self):
+        self.spans = []
+
+    def start_as_current_span(self, name, attributes=None, **kwargs):
+        span = _FakeSpan(name, attributes)
+        span.kwargs = kwargs
+        self.spans.append(span)
+        return span
+
+
+class _FakeHistogram:
+    def __init__(self):
+        self.records = []
+
+    def record(self, value, attributes=None):
+        self.records.append((value, dict(attributes or {})))
+
+
+class _FakeMeter:
+    def __init__(self):
+        self.histograms = {}
+
+    def create_histogram(self, name, unit=None, description=None):
+        histogram = _FakeHistogram()
+        self.histograms[name] = histogram
+        return histogram
+
+
+class ResponseMetricTests(unittest.TestCase):
+    def test_records_genai_duration_and_token_usage_metrics(self):
+        fake_meter = _FakeMeter()
+        _metric_instruments.clear()
+        telemetry = {
+            "gen_ai.response.model": "gpt-5.2-chat",
+            "gen_ai.usage.input_tokens": 11,
+            "gen_ai.usage.output_tokens": 7,
+        }
+        with patch("lucy_core.responses_loop._metric_meter", fake_meter):
+            record_response_metrics(
+                telemetry=telemetry,
+                duration_seconds=1.25,
+                request_model="gpt-5.2-chat",
+                otel_agent_id="agent-lucy-hosted-ncus:16",
+                otel_agent_version="16",
+            )
+
+        duration = fake_meter.histograms["gen_ai.client.operation.duration"]
+        self.assertEqual(duration.records[0][0], 1.25)
+        self.assertEqual(
+            duration.records[0][1]["gen_ai.agent.id"],
+            "agent-lucy-hosted-ncus:16",
+        )
+        self.assertEqual(duration.records[0][1]["gen_ai.provider.name"], "azure.ai.foundry")
+
+        usage = fake_meter.histograms["gen_ai.client.token.usage"]
+        self.assertEqual(
+            [(value, attrs["gen_ai.token.type"]) for value, attrs in usage.records],
+            [(11, "input"), (7, "output")],
+        )
+
+
 class RunResponseV2Tests(unittest.IsolatedAsyncioTestCase):
     """End-to-end tests for the orchestrator. Mocks the OpenAI client and the
     function registry; uses real build_response_payload / build_agent_reference
@@ -315,6 +446,65 @@ class RunResponseV2Tests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["tool_outputs"], [])
         self.assertEqual(session.previous_response_id, "r-1")
         self.assertEqual(session.last_eval_final_response_id, "r-1")
+
+    async def test_hosted_spans_get_final_response_usage_and_model(self):
+        """Hosted create_agent/chat spans carry model/usage for Foundry Monitor rollups."""
+        fake_tracer = _FakeTracer()
+        mock_client = _MockOpenAIClient([
+            _MockResponse(
+                response_id="r-final",
+                output_text="hello back",
+                model="gpt-5.2-chat-2025-12-11",
+                usage={"input_tokens": 11, "output_tokens": 7, "total_tokens": 18},
+            ),
+        ])
+        session = LucySession(session_id="s-1")
+        with self._clean_env(), patch.dict(
+            os.environ,
+            {
+                "LUCY_OTEL_AGENT_ID": "agent-lucy-hosted-ncus:13",
+                "MODEL_DEPLOYMENT_NAME": "gpt-5.2-chat",
+            },
+            clear=False,
+        ), patch("lucy_core.responses_loop._tracer", fake_tracer):
+            await run_response_v2(
+                user_text="hi",
+                session=session,
+                openai_client=mock_client,
+                agent_name="agent-lucy-prod",
+                agent_version="6",
+                function_registry={},
+            )
+
+        self.assertEqual([span.name for span in fake_tracer.spans], ["create_agent", "chat"])
+
+        create_span = fake_tracer.spans[0]
+        self.assertEqual(create_span.name, "create_agent")
+        self.assertEqual(
+            create_span.attributes["gen_ai.agent.id"],
+            "agent-lucy-hosted-ncus:13",
+        )
+        self.assertEqual(create_span.attributes["gen_ai.agent.version"], "13")
+        self.assertEqual(create_span.attributes["gen_ai.provider.name"], "azure.ai.foundry")
+        self.assertEqual(create_span.attributes["gen_ai.request.model"], "gpt-5.2-chat")
+        self.assertEqual(create_span.attributes["gen_ai.response.id"], "r-final")
+        self.assertEqual(
+            create_span.attributes["gen_ai.response.model"],
+            "gpt-5.2-chat-2025-12-11",
+        )
+        self.assertEqual(create_span.attributes["gen_ai.usage.input_tokens"], 11)
+        self.assertEqual(create_span.attributes["gen_ai.usage.output_tokens"], 7)
+        self.assertEqual(create_span.attributes["gen_ai.usage.total_tokens"], 18)
+
+        chat_span = fake_tracer.spans[1]
+        self.assertEqual(chat_span.attributes["operation"], "chat")
+        self.assertEqual(chat_span.attributes["gen_ai.operation.name"], "chat")
+        self.assertEqual(
+            chat_span.attributes["gen_ai.agent.id"],
+            "agent-lucy-hosted-ncus:13",
+        )
+        self.assertEqual(chat_span.attributes["gen_ai.response.id"], "r-final")
+        self.assertEqual(chat_span.attributes["gen_ai.usage.total_tokens"], 18)
 
     async def test_agent_reference_suppresses_explicit_reasoning_effort(self):
         """Gateway agent_reference calls must not inherit model-specific reasoning settings."""
