@@ -105,6 +105,7 @@ def _content_recording_enabled() -> bool:
     )
 
 
+<<<<<<< Updated upstream
 def _response_value(source: Any, key: str) -> Any:
     if isinstance(source, dict):
         return source.get(key)
@@ -407,6 +408,14 @@ def _get_otel_agent_version(otel_agent_id: str) -> str:
     if ":" in otel_agent_id:
         return otel_agent_id.rsplit(":", 1)[-1].strip()
     return ""
+=======
+def _is_conversation_not_found_error(exc: BaseException) -> bool:
+    """Detect stale Responses conversation handles from SDK/API errors."""
+    text = str(exc).lower()
+    return "conversation_not_found" in text or (
+        "conversation" in text and "not found" in text
+    )
+>>>>>>> Stashed changes
 
 
 def build_authenticated_state_items(session: LucySession) -> list[dict[str, Any]]:
@@ -440,6 +449,25 @@ def build_authenticated_state_items(session: LucySession) -> list[dict[str, Any]
     if not session.authenticated or not session.apex_id:
         return items
 
+    notice_status = str(session.metadata.get("notice_lookup_status") or "").strip().lower()
+    notice_apex_id = str(session.metadata.get("notice_lookup_apex_id") or "").strip()
+    if notice_status == "not_found" and (not notice_apex_id or notice_apex_id == str(session.apex_id)):
+        items.append(
+            {
+                "type": "message",
+                "role": "system",
+                "content": (
+                    "Lucy already attempted to retrieve this authenticated user's notice PDF "
+                    "during this session and no PDF was available. If the user now asks what "
+                    "the case is about, what applies to them, eligibility, status, payment, "
+                    "or next steps, do not call the notice/PDF lookup again. Use Dynamics "
+                    "member, case, and disbursement tools with the authenticated Apex ID. "
+                    "Only retry notice lookup if the user explicitly asks for the notice PDF "
+                    "or notice document again."
+                ),
+            }
+        )
+
     user_name = session.user_name or ""
     content = (
         "User is already authenticated. "
@@ -455,6 +483,61 @@ def build_authenticated_state_items(session: LucySession) -> list[dict[str, Any]
         }
     )
     return items
+
+
+def _classify_notice_tool_output(output: Any) -> str:
+    """Classify notice tool output so terminal misses do not replay every turn."""
+    text = str(output or "").strip()
+    if not text:
+        return "unknown"
+
+    lowered = text.lower()
+    pdf_markers = (
+        "- pdf_url:",
+        "blob.core.windows.net",
+        ".pdf",
+    )
+    if any(marker in lowered for marker in pdf_markers):
+        return "pdf_found"
+
+    found_markers = (
+        "i've found your notice",
+        "i found your notice",
+        "found your notice",
+        "based on the indexed content",
+    )
+    if any(marker in lowered for marker in found_markers):
+        return "found"
+
+    miss_markers = (
+        "couldn't find a notice",
+        "could not find a notice",
+        "wasn't able to locate",
+        "was not able to locate",
+        "no notice document",
+        "notice document for apex id",
+    )
+    if any(marker in lowered for marker in miss_markers):
+        return "not_found"
+
+    if lowered.startswith("error"):
+        return "unknown"
+    return "answered"
+
+
+def _record_notice_lookup_status(session: LucySession, status: str, output: Any = None) -> None:
+    """Mutate shared session metadata after terminal notice lookup output."""
+    if status not in {"pdf_found", "found", "not_found", "answered"}:
+        return
+
+    session.metadata["pending_notice_request"] = False
+    session.metadata["pending_notice_request_text"] = ""
+    session.metadata["notice_lookup_status"] = status
+    if session.apex_id:
+        session.metadata["notice_lookup_apex_id"] = str(session.apex_id)
+    if status == "not_found" and output:
+        session.metadata["notice_lookup_last_miss"] = str(output)[:1000]
+    logger.info("Notice lookup terminal status recorded in session metadata: %s", status)
 
 
 def extract_v2_function_calls(response: Any) -> list[dict[str, Any]]:
@@ -722,36 +805,45 @@ async def _run_response_v2_impl(
     previous_response_id = session.previous_response_id
     state_items = build_authenticated_state_items(session)
 
-    if conversation_id:
-        payload = build_response_payload(
-            conversation_id=conversation_id,
-            user_input=user_text,
-            agent_name=agent_name,
-            agent_version=agent_version,
-        )
-        if state_items:
-            payload["input"] = state_items + [
-                {
-                    "type": "message",
-                    "role": "user",
-                    "content": user_text,
-                }
-            ]
-    else:
+    def _input_with_state() -> Any:
+        if not state_items:
+            return user_text
+        return state_items + [
+            {
+                "type": "message",
+                "role": "user",
+                "content": user_text,
+            }
+        ]
+
+    def _build_initial_payload(
+        *,
+        conversation: Optional[str],
+        previous_id: Optional[str],
+    ) -> dict[str, Any]:
+        if conversation:
+            payload = build_response_payload(
+                conversation_id=conversation,
+                user_input=user_text,
+                agent_name=agent_name,
+                agent_version=agent_version,
+            )
+            if state_items:
+                payload["input"] = _input_with_state()
+            return payload
+
         payload = {
-            "input": user_text,
+            "input": _input_with_state(),
             "extra_body": build_agent_reference(agent_name, agent_version),
         }
-        if previous_response_id:
-            payload["previous_response_id"] = previous_response_id
-        if state_items:
-            payload["input"] = state_items + [
-                {
-                    "type": "message",
-                    "role": "user",
-                    "content": user_text,
-                }
-            ]
+        if previous_id:
+            payload["previous_response_id"] = previous_id
+        return payload
+
+    payload = _build_initial_payload(
+        conversation=conversation_id,
+        previous_id=previous_response_id,
+    )
 
     _apply_eval_metadata(
         payload,
@@ -778,7 +870,28 @@ async def _run_response_v2_impl(
         previous_response_id,
         len(state_items),
     )
-    response = openai_client.responses.create(**payload)
+    try:
+        response = openai_client.responses.create(**payload)
+    except Exception as exc:
+        if not conversation_id or not _is_conversation_not_found_error(exc):
+            raise
+
+        logger.warning(
+            "⚠️ Responses conversation %s was not found; clearing stale context and retrying once.",
+            conversation_id,
+        )
+        conversation_id = None
+        previous_response_id = None
+        session.conversation_id = None
+        session.previous_response_id = None
+        payload = _build_initial_payload(conversation=None, previous_id=None)
+        _apply_eval_metadata(payload, step="initial_retry", step_index=eval_step_index)
+        if max_output_tokens is not None:
+            payload["max_output_tokens"] = max_output_tokens
+        _apply_request_reasoning(payload)
+        if store:
+            payload["store"] = store.strip().lower() in {"1", "true", "yes", "on"}
+        response = openai_client.responses.create(**payload)
     tool_outputs: list[dict[str, Any]] = []
 
     response_id = getattr(response, "id", None)
@@ -836,6 +949,12 @@ async def _run_response_v2_impl(
                         "gen_ai.tool.call.result",
                         _truncate_span_value(output),
                     )
+            if name == "find_notice_for_user_sync":
+                _record_notice_lookup_status(
+                    session,
+                    _classify_notice_tool_output(output),
+                    output,
+                )
             tool_outputs.append(
                 {
                     "name": name,
