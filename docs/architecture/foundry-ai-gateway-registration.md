@@ -1,13 +1,26 @@
 # Foundry AI Gateway Interim Registration Runbook
 
-This runbook documents the interim path that wires Lucy's custom Python runtime
-in Azure Container Apps (ACA) to Microsoft Foundry via the Azure AI Gateway. It
-was useful for early traces, eval smoke tests, and gateway-level governance, but
-it is not the golden path. The target Foundry v2 production architecture is a
+This runbook documents the retired interim path that wired Lucy's custom Python
+runtime in Azure Container Apps (ACA) to Microsoft Foundry via the Azure AI
+Gateway. It was useful for early traces, eval smoke tests, and gateway-level
+governance, but it is no longer active. The target Foundry architecture is the
 Hosted Agent container that exposes the Responses protocol while reusing the
 UI-independent `LucyRuntime` core.
 
-## Current Production Resources
+## Retirement Status
+
+Retired on 2026-05-04 after the team abandoned the AI Gateway route and selected
+Hosted Agent as the path forward.
+
+- Deleted APIM: `apexclassaction-ai-gw`
+- Deleted gateway-only ACA: `agent-lucy-gateway-eus2`
+- Preserved member-facing Chainlit ACA: `agent-lucy-eus2`
+- Preserved current Hosted Agent path: `agent-lucy-hosted-ncus`
+
+Do not use this document as an active runbook unless the gateway route is
+deliberately rebuilt.
+
+## Historical Gateway Resources
 
 - Lucy ACA: `agent-lucy-eus2`
 - Lucy Gateway ACA: `agent-lucy-gateway-eus2`
@@ -23,7 +36,7 @@ UI-independent `LucyRuntime` core.
 - Current gateway image digest: `sha256:718d2e537169263ea10e96e81b61c87ccb7f4daf53e84f8e1dea04e1e64494bd`
 - Current Foundry project agent version used by gateway/runtime: `agent-lucy-prod:7`
 
-## Why The Gateway ACA Exists
+## Why The Gateway ACA Existed
 
 ACA exposes one public HTTPS ingress target port per container app. The existing
 Lucy app serves Chainlit on port `8000`; the gateway HTTP wrapper serves
@@ -40,7 +53,7 @@ there is a separate product decision to replace it.
 
 ## Required Environment
 
-Set these on the gateway-facing ACA:
+These were set on the gateway-facing ACA:
 
 ```bash
 AZURE_AI_PROJECT_ENDPOINT="https://agent-lucy-foundry-eus2.services.ai.azure.com/api/projects/agent-lucy-prj-eus2"
@@ -58,7 +71,7 @@ APPLICATIONINSIGHTS_CONNECTION_STRING="<same App Insights connection connected t
 Keep `LUCY_OTEL_AGENT_ID` exactly equal to the OpenTelemetry Agent ID entered
 in the Foundry Register Asset form.
 
-## Register Lucy In Foundry (Interim Gateway Route)
+## Historical Registration Steps
 
 1. In Foundry, confirm the resource has an AI Gateway configured:
    Operate -> Admin -> AI Gateway.
@@ -83,7 +96,7 @@ publication currently returns `AuthorizationFailed` for
 Until that role is widened, the runtime falls back to the project agent version
 directly.
 
-## Smoke Checks
+## Historical Smoke Checks
 
 ```bash
 az account show
@@ -148,9 +161,9 @@ Seed cases live at `agent/evals/cases.jsonl`. They cover:
 Use those cases for the initial Foundry eval rule setup, then replace placeholder
 authenticated IDs with safe staging records before running tool-writing cases.
 
-## Interim Monitor Acceptance
+## Historical Monitor Acceptance
 
-The gateway bridge is healthy when:
+The gateway bridge was considered healthy when:
 
 - new APIM/Foundry URL reaches Lucy successfully
 - traces land in the same Application Insights resource as the Foundry project
@@ -202,13 +215,17 @@ The Hosted Agent work should continue to:
 - preserve Chainlit as the public member UI and treat the hosted endpoint as the
   Foundry-managed agent runtime endpoint
 - verify first-class traces, token accounting, dashboards, and Evals v2 before
-  retiring the interim gateway route
+  production cutover
+
+If the portal's built-in `Agents (preview)` workbook stays blank or unreliable,
+use the fallback KQL runbook at
+[docs/operations/hosted-agent-observability-fallback.md](../operations/hosted-agent-observability-fallback.md)
+and keep the raw App Insights query path as the evidence source.
 
 The East US2 `create_version` attempt against project `agent-lucy-prj-eus2`
 returned `bad_request: The requested experience is not available for this
-subscription.` Treat the East US2 gateway route as the interim production bridge
-until Microsoft enables Hosted Agents there or until the product deliberately
-cuts over to the North Central US Hosted path.
+subscription.` The product deliberately moved to the North Central US Hosted
+path, and the East US2 gateway route has been deleted.
 
 Before broad production cutover, move secret-bearing runtime configuration out
 of plain Hosted version environment variables and into managed identity, Key

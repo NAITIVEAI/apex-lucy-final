@@ -1990,6 +1990,9 @@ def setup_dynamics_functions():
 
         # Primary member information function (SECOND HIGHEST PRIORITY)
         get_class_member_details_sync,
+        get_member_cases_sync,
+        get_case_details_sync,
+        get_comprehensive_member_info_sync,
 
         # Document retrieval (CRITICAL FOR NOTICE REQUESTS)
         find_notice_for_user_sync,

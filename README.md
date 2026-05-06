@@ -88,7 +88,7 @@ Tests live in `agent/tests/` and use Python's stdlib `unittest`. The portal curr
 | `docs/` | Architecture, integration, executive, handoff, and portal-guide documentation |
 | `plans/` | Active spec-driven plan files (currently empty/uninitialized) |
 | `state/` | `refactor-ledger.md` and other workflow state |
-| `.agents/` | Custom agent skills, including `.agents/skills/lucy-spec-implementation/` |
+| `.agents/` | Local/custom agent skill workspace |
 | `learn/` | Scout reports and autoresearch artifacts |
 | `removal/` | Non-runtime artifacts moved out of the runtime surface |
 | `AGENTS.md` | Spec-driven workflow contract — mandatory reading |
@@ -152,9 +152,8 @@ This repository follows a **strict spec-driven workflow** defined in [`AGENTS.md
 
 1. Read `state/refactor-ledger.md`.
 2. Pick the lowest-numbered incomplete plan in `plans/` (read **exactly one**).
-3. Load `.agents/skills/lucy-spec-implementation/SKILL.md`.
-4. Source-of-truth hierarchy: explicit user instruction → `AGENTS.md` → active plan → skill → existing code patterns.
-5. Produce a proposal-before-edit brief; make the smallest safe change; run targeted tests; update the ledger.
+3. Source-of-truth hierarchy: explicit user instruction → `AGENTS.md` → active plan → existing code patterns.
+4. Produce a proposal-before-edit brief; make the smallest safe change; run targeted tests; update the ledger.
 
 Scope is bounded to the Lucy go-live refactor (plans 001–005). Bank ingestion, Business Central, model-routing redesign, generalized payout calculator, broader rate-limiting, and Lucy architecture redesign are explicitly out of scope.
 

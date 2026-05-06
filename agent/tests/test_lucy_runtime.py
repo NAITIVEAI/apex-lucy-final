@@ -167,6 +167,51 @@ class LucyRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("sig=abc", response.artifacts[0].url)
         self.assertIsNone(response.handoff)
 
+    async def test_respond_marks_notice_miss_terminal_in_session_metadata(self):
+        def find_notice_for_user_sync(apex_id):
+            return (
+                "I couldn't find a notice document for APEX ID A123. "
+                "This sometimes happens when there's a delay."
+            )
+
+        client = _MockOpenAIClient([
+            _MockResponse(
+                response_id="r-1",
+                output=[
+                    _function_call_item(
+                        "find_notice_for_user_sync",
+                        '{"apex_id": "A123"}',
+                        "call-miss",
+                    )
+                ],
+            ),
+            _MockResponse(response_id="r-2", output_text="I could not find the notice."),
+        ])
+        runtime = LucyRuntime(
+            openai_client=client,
+            agent_name="lucy",
+            agent_version="4",
+            function_registry={"find_notice_for_user_sync": find_notice_for_user_sync},
+        )
+        session = LucySession(
+            session_id="s-1",
+            authenticated=True,
+            apex_id="A123",
+            metadata={
+                "pending_notice_request": True,
+                "pending_notice_request_text": "explain my notice",
+            },
+        )
+        request = LucyRequest(input_text="A123", session=session)
+        with _clean_env():
+            response = await runtime.respond(request)
+
+        self.assertEqual(response.text, "I could not find the notice.")
+        self.assertFalse(session.metadata["pending_notice_request"])
+        self.assertEqual(session.metadata["pending_notice_request_text"], "")
+        self.assertEqual(session.metadata["notice_lookup_status"], "not_found")
+        self.assertEqual(session.metadata["notice_lookup_apex_id"], "A123")
+
     async def test_respond_extracts_handoff_payload_and_artifact(self):
         def send_handoff_notification_email_sync(apex_id, reason=None):
             return (

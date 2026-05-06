@@ -45,6 +45,16 @@ class CoaReasonWritebackTests(unittest.TestCase):
         self.user_functions = _load_user_functions()
         self.user_functions._ENTITY_FIELDS_CACHE.clear()
 
+    def test_dynamics_tool_registry_exposes_case_followup_tools(self):
+        with patch.object(self.user_functions, "DYNAMICS_ENABLED", True):
+            names = {fn.__name__ for fn in self.user_functions.setup_dynamics_functions()}
+
+        self.assertIn("get_class_member_details_sync", names)
+        self.assertIn("get_member_cases_sync", names)
+        self.assertIn("get_case_details_sync", names)
+        self.assertIn("get_comprehensive_member_info_sync", names)
+        self.assertIn("find_notice_for_user_sync", names)
+
     def _seed_metadata(self, *attributes):
         self.user_functions._ENTITY_FIELDS_CACHE["new_classmembers"] = {
             "ts": 9999999999,

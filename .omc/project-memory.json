@@ -1,6 +1,6 @@
 {
   "version": "1.0.0",
-  "lastScanned": 1777114466242,
+  "lastScanned": 1777934187227,
   "projectRoot": "/Users/chris/ai/Apex-Lucy-Final",
   "techStack": {
     "languages": [],
@@ -38,7 +38,7 @@
       "path": "agent",
       "purpose": null,
       "fileCount": 2,
-      "lastAccessed": 1777114466233,
+      "lastAccessed": 1777934187219,
       "keyFiles": [
         "requirements-dev.txt"
       ]
@@ -46,36 +46,64 @@
     "docs": {
       "path": "docs",
       "purpose": "Documentation",
-      "fileCount": 1,
-      "lastAccessed": 1777114466238,
+      "fileCount": 5,
+      "lastAccessed": 1777934187220,
+      "keyFiles": [
+        "code-standards.md",
+        "codebase-summary.md",
+        "project-overview-pdr.md",
+        "system-architecture.md"
+      ]
+    },
+    "graphify-out": {
+      "path": "graphify-out",
+      "purpose": null,
+      "fileCount": 4,
+      "lastAccessed": 1777934187221,
+      "keyFiles": [
+        "GRAPH_REPORT.md",
+        "graph.html",
+        "graph.json"
+      ]
+    },
+    "learn": {
+      "path": "learn",
+      "purpose": null,
+      "fileCount": 0,
+      "lastAccessed": 1777934187223,
       "keyFiles": []
     },
     "plans": {
       "path": "plans",
       "purpose": null,
-      "fileCount": 0,
-      "lastAccessed": 1777114466238,
-      "keyFiles": []
+      "fileCount": 2,
+      "lastAccessed": 1777934187223,
+      "keyFiles": [
+        "001-lucy-foundry-hosted-agent-migration.md",
+        "002-foundry-ai-gateway-custom-agent-registration.md"
+      ]
     },
     "portal": {
       "path": "portal",
       "purpose": null,
       "fileCount": 1,
-      "lastAccessed": 1777114466238,
+      "lastAccessed": 1777934187224,
       "keyFiles": []
     },
     "state": {
       "path": "state",
       "purpose": null,
-      "fileCount": 0,
-      "lastAccessed": 1777114466238,
-      "keyFiles": []
+      "fileCount": 1,
+      "lastAccessed": 1777934187225,
+      "keyFiles": [
+        "refactor-ledger.md"
+      ]
     },
     "agent/app": {
       "path": "agent/app",
       "purpose": "Application code",
-      "fileCount": 36,
-      "lastAccessed": 1777114466239,
+      "fileCount": 38,
+      "lastAccessed": 1777934187225,
       "keyFiles": [
         "Dockerfile",
         "You are a helpful assist.textClipping",
@@ -85,19 +113,19 @@
     "agent/tests": {
       "path": "agent/tests",
       "purpose": "Test files",
-      "fileCount": 9,
-      "lastAccessed": 1777114466239,
+      "fileCount": 20,
+      "lastAccessed": 1777934187225,
       "keyFiles": [
         "test_agent_reference_payload.py",
         "test_agent_registry.py",
-        "test_foundry_publish.py"
+        "test_coa_reason_writeback.py"
       ]
     },
     "portal/app": {
       "path": "portal/app",
       "purpose": "Application code",
       "fileCount": 12,
-      "lastAccessed": 1777114466239,
+      "lastAccessed": 1777934187227,
       "keyFiles": [
         "Dockerfile",
         "agent_portal.py",
@@ -105,6 +133,307 @@
       ]
     }
   },
-  "hotPaths": [],
+  "hotPaths": [
+    {
+      "path": "agent/app/apex.py",
+      "accessCount": 36,
+      "lastAccessed": 1777203818688,
+      "type": "file"
+    },
+    {
+      "path": "state/refactor-ledger.md",
+      "accessCount": 8,
+      "lastAccessed": 1777206087104,
+      "type": "file"
+    },
+    {
+      "path": "plans/002-foundry-ai-gateway-custom-agent-registration.md",
+      "accessCount": 6,
+      "lastAccessed": 1777200164835,
+      "type": "file"
+    },
+    {
+      "path": "agent/app/lucy_core/responses_loop.py",
+      "accessCount": 6,
+      "lastAccessed": 1777206010920,
+      "type": "file"
+    },
+    {
+      "path": "plans/001-lucy-foundry-hosted-agent-migration.md",
+      "accessCount": 4,
+      "lastAccessed": 1777194129538,
+      "type": "file"
+    },
+    {
+      "path": "agent/tests/test_lucy_responses_loop.py",
+      "accessCount": 3,
+      "lastAccessed": 1777201021860,
+      "type": "file"
+    },
+    {
+      "path": "agent/app/start_services.sh",
+      "accessCount": 3,
+      "lastAccessed": 1777206019940,
+      "type": "file"
+    },
+    {
+      "path": "agent/app/Dockerfile",
+      "accessCount": 3,
+      "lastAccessed": 1777206022341,
+      "type": "file"
+    },
+    {
+      "path": "agent/app/.env.example",
+      "accessCount": 3,
+      "lastAccessed": 1777206027294,
+      "type": "file"
+    },
+    {
+      "path": "README.md",
+      "accessCount": 3,
+      "lastAccessed": 1777935782766,
+      "type": "file"
+    },
+    {
+      "path": "learn/260425-2359-init-standard/scout-context.md",
+      "accessCount": 2,
+      "lastAccessed": 1777187032701,
+      "type": "file"
+    },
+    {
+      "path": "agent/app/requirements.txt",
+      "accessCount": 2,
+      "lastAccessed": 1777187041097,
+      "type": "file"
+    },
+    {
+      "path": "agent/app/lucy_core/__init__.py",
+      "accessCount": 2,
+      "lastAccessed": 1777201139857,
+      "type": "file"
+    },
+    {
+      "path": "agent/tests/test_http_app.py",
+      "accessCount": 2,
+      "lastAccessed": 1777203554434,
+      "type": "file"
+    },
+    {
+      "path": "agent/app/lucy_core/http_app.py",
+      "accessCount": 2,
+      "lastAccessed": 1777205991789,
+      "type": "file"
+    },
+    {
+      "path": ".graphifyignore",
+      "accessCount": 2,
+      "lastAccessed": 1777935650780,
+      "type": "file"
+    },
+    {
+      "path": "KNOWNS.md",
+      "accessCount": 2,
+      "lastAccessed": 1777935782297,
+      "type": "file"
+    },
+    {
+      "path": "AGENTS.md",
+      "accessCount": 2,
+      "lastAccessed": 1777935783433,
+      "type": "file"
+    },
+    {
+      "path": "agent/app/health_server.py",
+      "accessCount": 2,
+      "lastAccessed": 1777935785375,
+      "type": "file"
+    },
+    {
+      "path": "agent/app/agent_registry.py",
+      "accessCount": 2,
+      "lastAccessed": 1777935785737,
+      "type": "file"
+    },
+    {
+      "path": "agent/app/foundry_v2.py",
+      "accessCount": 1,
+      "lastAccessed": 1777186812484,
+      "type": "file"
+    },
+    {
+      "path": "agent/tests/test_agent_registry.py",
+      "accessCount": 1,
+      "lastAccessed": 1777186813221,
+      "type": "file"
+    },
+    {
+      "path": "portal/app/Dockerfile",
+      "accessCount": 1,
+      "lastAccessed": 1777186859139,
+      "type": "file"
+    },
+    {
+      "path": "portal/app/requirements.txt",
+      "accessCount": 1,
+      "lastAccessed": 1777187042070,
+      "type": "file"
+    },
+    {
+      "path": "docs/project-overview-pdr.md",
+      "accessCount": 1,
+      "lastAccessed": 1777187088772,
+      "type": "file"
+    },
+    {
+      "path": "docs/codebase-summary.md",
+      "accessCount": 1,
+      "lastAccessed": 1777187137626,
+      "type": "file"
+    },
+    {
+      "path": "docs/code-standards.md",
+      "accessCount": 1,
+      "lastAccessed": 1777187183430,
+      "type": "file"
+    },
+    {
+      "path": "docs/system-architecture.md",
+      "accessCount": 1,
+      "lastAccessed": 1777187227669,
+      "type": "file"
+    },
+    {
+      "path": "learn/260425-2359-init-standard/learn-results.tsv",
+      "accessCount": 1,
+      "lastAccessed": 1777187324857,
+      "type": "file"
+    },
+    {
+      "path": "learn/260425-2359-init-standard/validation-report.md",
+      "accessCount": 1,
+      "lastAccessed": 1777187335378,
+      "type": "file"
+    },
+    {
+      "path": "learn/260425-2359-init-standard/summary.md",
+      "accessCount": 1,
+      "lastAccessed": 1777187356805,
+      "type": "file"
+    },
+    {
+      "path": ".hermes/plans/2026-04-25_010100-lucy-foundry-hosted-agent-migration.md",
+      "accessCount": 1,
+      "lastAccessed": 1777193621667,
+      "type": "file"
+    },
+    {
+      "path": "agent/app/lucy_core/session.py",
+      "accessCount": 1,
+      "lastAccessed": 1777198073208,
+      "type": "file"
+    },
+    {
+      "path": "agent/app/lucy_core/errors.py",
+      "accessCount": 1,
+      "lastAccessed": 1777198075453,
+      "type": "file"
+    },
+    {
+      "path": "agent/tests/test_lucy_session.py",
+      "accessCount": 1,
+      "lastAccessed": 1777198087228,
+      "type": "file"
+    },
+    {
+      "path": "agent/app/lucy_core/tool_registry.py",
+      "accessCount": 1,
+      "lastAccessed": 1777200032558,
+      "type": "file"
+    },
+    {
+      "path": "agent/tests/test_lucy_tool_registry.py",
+      "accessCount": 1,
+      "lastAccessed": 1777200052611,
+      "type": "file"
+    },
+    {
+      "path": "agent/app/lucy_core/runtime.py",
+      "accessCount": 1,
+      "lastAccessed": 1777201128504,
+      "type": "file"
+    },
+    {
+      "path": "agent/tests/test_lucy_runtime.py",
+      "accessCount": 1,
+      "lastAccessed": 1777201152433,
+      "type": "file"
+    },
+    {
+      "path": "agent/app/foundry_init.py",
+      "accessCount": 1,
+      "lastAccessed": 1777203122033,
+      "type": "file"
+    },
+    {
+      "path": "agent/tests/test_foundry_init.py",
+      "accessCount": 1,
+      "lastAccessed": 1777203183389,
+      "type": "file"
+    },
+    {
+      "path": "agent/app/user_functions.py",
+      "accessCount": 1,
+      "lastAccessed": 1777203287587,
+      "type": "file"
+    },
+    {
+      "path": "TASKS.md",
+      "accessCount": 1,
+      "lastAccessed": 1777935783052,
+      "type": "file"
+    },
+    {
+      "path": "OPENCODE.md",
+      "accessCount": 1,
+      "lastAccessed": 1777935783838,
+      "type": "file"
+    },
+    {
+      "path": "CLAUDE.md",
+      "accessCount": 1,
+      "lastAccessed": 1777935784293,
+      "type": "file"
+    },
+    {
+      "path": "agent/requirements-dev.txt",
+      "accessCount": 1,
+      "lastAccessed": 1777935784587,
+      "type": "file"
+    },
+    {
+      "path": "agent/app/response_config.py",
+      "accessCount": 1,
+      "lastAccessed": 1777935786120,
+      "type": "file"
+    },
+    {
+      "path": "agent/app/teams_integration_fallback.py",
+      "accessCount": 1,
+      "lastAccessed": 1777935786554,
+      "type": "file"
+    },
+    {
+      "path": "agent/app/tracing_utils.py",
+      "accessCount": 1,
+      "lastAccessed": 1777935787281,
+      "type": "file"
+    },
+    {
+      "path": "agent/app/notice_match.py",
+      "accessCount": 1,
+      "lastAccessed": 1777935787456,
+      "type": "file"
+    }
+  ],
   "userDirectives": []
 }
