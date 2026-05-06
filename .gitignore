@@ -45,3 +45,5 @@ CLAUDE.md
 AGENTS.md
 
 .worktrees/
+*.db-shm
+*.db-shm
