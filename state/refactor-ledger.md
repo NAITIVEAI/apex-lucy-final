@@ -2,11 +2,7 @@
 
 This ledger records every plan from `/plans/` along with its status, summary, files changed, research evidence, tests, results, blockers, and follow-ups. It is the canonical resume point for any new agent session per `AGENTS.md`.
 
-<<<<<<< Updated upstream
 **Source-of-truth hierarchy:** explicit user instruction → `AGENTS.md` → `TASKS.md` → active `/plans/*.md` → existing code patterns.
-=======
-**Source-of-truth hierarchy:** explicit user instruction → `AGENTS.md` → active `/plans/*.md` → existing code patterns.
->>>>>>> Stashed changes
 
 ---
 

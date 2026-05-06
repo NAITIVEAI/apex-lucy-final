@@ -41,15 +41,9 @@ North Central US:
 - ACR: `agentlucyacrncus.azurecr.io`
 - Model deployment: `gpt-5.2-chat`
 - Hosted Agent: `agent-lucy-hosted-ncus:20`
-<<<<<<< Updated upstream
-- Inner prompt agent: `agent-lucy-prod:6`
-- Hosted image:
-  `agentlucyacrncus.azurecr.io/agent-lucy-hosted:hosted-pr2-20260504102638-operatechatspan`
-=======
 - Inner prompt agent used by the hosted runtime: `agent-lucy-prod:6`
 - Hosted image:
-  `agentlucyacrncus.azurecr.io/agent-lucy-hosted:hosted-pr2-20260503072101-convfix`
->>>>>>> Stashed changes
+  `agentlucyacrncus.azurecr.io/agent-lucy-hosted:hosted-pr2-20260504102638-operatechatspan`
 
 The basic SDK smoke is green:
 
