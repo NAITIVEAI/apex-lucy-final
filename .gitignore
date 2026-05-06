@@ -46,7 +46,6 @@ AGENTS.md
 
 .worktrees/
 *.db-shm
-*.db-shm
 .agent/skills/kn-commit/SKILL.md
 .agent/skills/kn-debug/SKILL.md
 .agent/skills/kn-doc/SKILL.md
