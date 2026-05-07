@@ -2291,6 +2291,88 @@ Follow-up:
 
 ---
 
+### Azure Deployment Consolidation — COMPLETED 2026-05-07
+
+**Status:** completed.
+
+**Summary:**
+- Verified local `main` was clean and in sync with `origin/main` at
+  `ed5d2a22ee35d1bdb46d1b6681a74fb5d80e12c7`.
+- Built and deployed the member-facing EUS2 Container App from the consolidated
+  `main` build.
+- Built the North Central US Hosted Agent wrapper image and created Hosted
+  Agent version `agent-lucy-hosted-ncus:22` by cloning v21's full hosted
+  environment variable set (`61` keys), changing only the image and explicit
+  hosted telemetry version values.
+- Built and updated the West US generic notice sync Container App Job image,
+  then ran a manual execution to prove the refreshed image boots, authenticates,
+  reads the existing ledger, and skips unchanged PDFs.
+
+**Files changed:**
+- `TASKS.md`
+- `agent/hosted_agent/README.md`
+- `state/refactor-ledger.md`
+
+**Live Azure validation:**
+- Member runtime:
+  - ACA: `agent-lucy-eus2`
+  - RG: `agent-lucy-eus2`
+  - Revision: `agent-lucy-eus2--0000071`
+  - Image:
+    `agentlucyacreus2.azurecr.io/agent-lucy-eus2:main-ed5d2a2-20260507063412`
+  - Digest:
+    `sha256:9e4b51979ea468a3d455a5386ce05917b2cc3362f577f582066e9f092c325b64`
+  - Public URL returned HTTP `200`:
+    `https://agent-lucy-eus2.purpleocean-f3514433.eastus2.azurecontainerapps.io/`
+- Hosted Agent:
+  - Agent/version: `agent-lucy-hosted-ncus:22`
+  - Status: `active`
+  - Image:
+    `agentlucyacrncus.azurecr.io/agent-lucy-hosted:hosted-main-ed5d2a2-20260507063412`
+  - Digest:
+    `sha256:7e7528c2525d3e2da9393f4193b4f54f7f005a0de1166167ac17b451485f8e98`
+  - SDK smoke response:
+    `caresp_ed298900f7ae4fc700dBXFaKoaB7vdEGtRya8Y99vMeLKE8Wdu`
+  - SDK status: `completed`; error: `None`.
+- Generic notice sync:
+  - Container App Job: `lucy-generic-notice-sync`
+  - RG: `rg-apex-integration-prod`
+  - Schedule: `15 3 * * *`
+  - Image:
+    `acrapexintegrationprod.azurecr.io/generic-notice-sync:generic-notice-sync-ed5d2a2-20260507063412`
+  - Digest:
+    `sha256:b5e1a6c97b52a599dc4d119fa7bdde54f826bd878a9f22cb9844162cb3d2520a`
+  - Manual execution: `lucy-generic-notice-sync-w7sm2i5`
+  - Execution status: `Succeeded`
+  - Final stats:
+    `cases_seen=1211`, `pdfs_seen=463`, `uploaded=0`, `skipped=463`,
+    `failed=0`, `missing_notice_packet=748`.
+
+**Tests / validation run:**
+- `python3 -m compileall -q agent/app agent/hosted_agent agent/generic_notice_sync`
+  - Result: passed.
+- `pytest -q agent/tests/test_generic_notice_sync.py agent/tests/test_generic_notice_fallback.py agent/tests/test_lucy_field_policy.py agent/tests/test_lucy_responses_loop.py agent/tests/test_lucy_runtime.py agent/tests/test_notice_tool_instructions.py agent/tests/test_coa_reason_writeback.py agent/tests/test_hosted_deploy_env.py`
+  - Result: `78 passed`.
+- `curl` against the member ACA root returned HTTP `200`.
+- `az containerapp job logs show` for the manual generic sync execution showed
+  clean completion with no failed file transfers.
+
+**Results:**
+- Azure now has the consolidated `ed5d2a2` build deployed across the
+  member-facing ACA, Hosted Agent wrapper, and generic notice sync job.
+- The generic sync redeploy did not churn blob storage because the existing
+  ledger correctly skipped all `463` already-copied generic notice PDFs.
+
+**Blockers / follow-ups:**
+- App Insights / Log Analytics did not show fresh Hosted v22 rows in the short
+  post-smoke query window. The SDK smoke completed successfully, and this
+  project already treats native/monitor telemetry surfaces as delayed or
+  unreliable. Recheck raw telemetry later before using v22 for COO evidence.
+- Next functional canary should exercise individualized notice miss -> generic
+  notice fallback -> Chainlit PDF drawer -> Dynamics member context.
+
+---
+
 ## Blocked / Abandoned Plans
 
 _none_

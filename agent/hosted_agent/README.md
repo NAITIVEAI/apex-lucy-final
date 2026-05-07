@@ -40,10 +40,10 @@ North Central US:
   `https://agent-lucy-foundry-ncus.services.ai.azure.com/api/projects/agent-lucy-prj-ncus`
 - ACR: `agentlucyacrncus.azurecr.io`
 - Model deployment: `gpt-5.2-chat`
-- Hosted Agent: `agent-lucy-hosted-ncus:21`
+- Hosted Agent: `agent-lucy-hosted-ncus:22`
 - Inner prompt agent: `agent-lucy-prod:8`
 - Last documented hosted image:
-  `agentlucyacrncus.azurecr.io/agent-lucy-hosted:hosted-pr2-20260504102638-operatechatspan`
+  `agentlucyacrncus.azurecr.io/agent-lucy-hosted:hosted-main-ed5d2a2-20260507063412`
 
 The basic SDK smoke is green:
 
@@ -75,6 +75,9 @@ Expected smoke result: `completed None` with a short Lucy response.
   response ids. The adapter keeps Hosted `caresp_...` / `conv_...` identifiers
   as Foundry metadata but does not forward them as inner prompt-agent
   conversation state.
+- Fresh Hosted v22 SDK smoke on 2026-05-07 returned
+  `caresp_ed298900f7ae4fc700dBXFaKoaB7vdEGtRya8Y99vMeLKE8Wdu`,
+  `status=completed`, `error=None`.
 - Fresh Hosted v21 REST smokes on 2026-05-06 returned
   `caresp_65a1ddd2d4dcc73700KUIfwqFoHdZZJLFBxGfSc8HTMpmdNo1s`,
   `caresp_b41756284523295400kHMouXPVPnbF9ek9IBxWU37rbrScSIkE`, and

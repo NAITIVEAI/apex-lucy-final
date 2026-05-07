@@ -1,18 +1,18 @@
 # TASKS.md
 
-Current state: **prestable, improving**. Lucy Hosted v21 is running on the
-chat-model lane, raw App Insights telemetry has hosted `create_agent` plus
-Operate-workbook-compatible `chat` model/token usage, and the member-facing EUS2
-runtime is healthy. The built-in preview Foundry ops dashboard is still not
-reliable enough to call the Foundry migration complete; use App Insights KQL and
-the `Lucy Hosted COO Monitor` workbook as the verified portal evidence path
-unless the native Operate cards start showing usable run/cost/success/token
-evidence.
+Current state: **prestable, improving**. Lucy Hosted v22 is active and the
+member-facing EUS2 runtime is healthy. Prior v21 raw App Insights telemetry has
+hosted `create_agent` plus Operate-workbook-compatible `chat` model/token usage;
+fresh v22 raw telemetry was not visible in the short post-deploy query window.
+The built-in preview Foundry ops dashboard is still not reliable enough to call
+the Foundry migration complete; use App Insights KQL and the
+`Lucy Hosted COO Monitor` workbook as the verified portal evidence path unless
+the native Operate cards start showing usable run/cost/success/token evidence.
 
 ## Read This First
 
 - [ ] Start with `/state/refactor-ledger.md`, especially the `Hosted Agent RBAC/search/dashboard cleanup 2026-04-29` section.
-- [ ] Treat `agent-lucy-hosted-ncus:21` as the current Hosted canary.
+- [ ] Treat `agent-lucy-hosted-ncus:22` as the current Hosted canary.
 - [ ] Treat `agent-lucy-eus2` as the current member-facing Chainlit runtime.
 - [ ] The EUS2 AI Gateway/APIM bridge has been retired and deleted; do not rebuild it unless Hosted is explicitly abandoned again.
 - [ ] Use raw App Insights KQL, Foundry Agent metrics where populated, and the
@@ -25,13 +25,23 @@ evidence.
   - ACA: `agent-lucy-eus2`
   - RG: `agent-lucy-eus2`
   - App Insights: `agent-lucy-appins-eus2`
-  - Current revision: `agent-lucy-eus2--0000069`
+  - Current revision: `agent-lucy-eus2--0000071`
+  - Current image: `agentlucyacreus2.azurecr.io/agent-lucy-eus2:main-ed5d2a2-20260507063412`
 - [x] Hosted Agent canary is in North Central US:
   - Foundry account/project: `agent-lucy-foundry-ncus` / `agent-lucy-prj-ncus`
-  - Hosted Agent: `agent-lucy-hosted-ncus:21`
-  - Last documented ACR image: `agentlucyacrncus.azurecr.io/agent-lucy-hosted:hosted-pr2-20260504102638-operatechatspan`
+  - Hosted Agent: `agent-lucy-hosted-ncus:22`
+  - Current ACR image: `agentlucyacrncus.azurecr.io/agent-lucy-hosted:hosted-main-ed5d2a2-20260507063412`
   - Model deployment: `gpt-5.2-chat`
   - Inner prompt agent used by the hosted runtime: `agent-lucy-prod:8`
+- [x] Generic notice sync job is live in West US:
+  - Container App Job: `lucy-generic-notice-sync`
+  - Resource group: `rg-apex-integration-prod`
+  - Current image: `acrapexintegrationprod.azurecr.io/generic-notice-sync:generic-notice-sync-ed5d2a2-20260507063412`
+  - Schedule: `15 3 * * *`
+- [x] Hosted v22 smoke passed on 2026-05-07:
+  - Response id: `caresp_ed298900f7ae4fc700dBXFaKoaB7vdEGtRya8Y99vMeLKE8Wdu`
+  - SDK status: `completed`
+  - Error: `None`
 - [x] Hosted v21 smoke passed on 2026-05-06:
   - Latest response ids:
     `caresp_65a1ddd2d4dcc73700KUIfwqFoHdZZJLFBxGfSc8HTMpmdNo1s`,
