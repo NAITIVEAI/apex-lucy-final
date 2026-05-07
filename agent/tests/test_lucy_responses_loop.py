@@ -9,6 +9,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "agent" / "app"))
 
 from lucy_core.responses_loop import (
     _apply_request_reasoning,
+    _classify_notice_tool_output,
     _metric_instruments,
     build_authenticated_state_items,
     collect_response_telemetry,
@@ -151,6 +152,11 @@ class BuildAuthenticatedStateItemsTests(unittest.TestCase):
         self.assertIn("do not call the notice/PDF lookup again", combined)
         self.assertIn("Use Dynamics", combined)
         self.assertIn("A123", combined)
+
+    def test_generic_notice_fallback_is_terminal_found_status(self):
+        output = "NOTICE_SOURCE_TYPE: generic_notice_fallback\nI found the generic notice packet."
+
+        self.assertEqual(_classify_notice_tool_output(output), "found")
 
 
 class ExtractV2FunctionCallsTests(unittest.TestCase):

@@ -105,7 +105,6 @@ def _content_recording_enabled() -> bool:
     )
 
 
-<<<<<<< Updated upstream
 def _response_value(source: Any, key: str) -> Any:
     if isinstance(source, dict):
         return source.get(key)
@@ -408,14 +407,14 @@ def _get_otel_agent_version(otel_agent_id: str) -> str:
     if ":" in otel_agent_id:
         return otel_agent_id.rsplit(":", 1)[-1].strip()
     return ""
-=======
+
+
 def _is_conversation_not_found_error(exc: BaseException) -> bool:
     """Detect stale Responses conversation handles from SDK/API errors."""
     text = str(exc).lower()
     return "conversation_not_found" in text or (
         "conversation" in text and "not found" in text
     )
->>>>>>> Stashed changes
 
 
 def build_authenticated_state_items(session: LucySession) -> list[dict[str, Any]]:
@@ -501,6 +500,8 @@ def _classify_notice_tool_output(output: Any) -> str:
         return "pdf_found"
 
     found_markers = (
+        "notice_source_type: generic_notice_fallback",
+        "generic notice packet",
         "i've found your notice",
         "i found your notice",
         "found your notice",

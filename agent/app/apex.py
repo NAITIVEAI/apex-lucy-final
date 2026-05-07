@@ -2556,6 +2556,8 @@ def _classify_notice_tool_output(output: Any) -> str:
 
     lowered = text.lower()
     found_markers = (
+        "notice_source_type: generic_notice_fallback",
+        "generic notice packet",
         "i've found your notice",
         "i found your notice",
         "found your notice",

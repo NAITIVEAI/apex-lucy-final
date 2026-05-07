@@ -3,6 +3,7 @@ import sys
 import logging
 import requests
 import json
+import re
 from typing import Dict, List, Optional, Any
 from threading import Lock
 from dotenv import load_dotenv
@@ -65,6 +66,17 @@ import random
 from datetime import datetime, timedelta, timezone
 from azure.storage.blob import BlobServiceClient, BlobSasPermissions, generate_blob_sas, BlobClient
 import chainlit as cl
+from lucy_field_policy import (
+    CLASS_MEMBER_ENTITY_SET,
+    LUCY_CLASS_MEMBER_UPDATE_FIELDS,
+    LUCY_SYSTEM_WRITE_FIELDS,
+    MEMBER_DISBURSEMENT_ENTITY_SET,
+    class_member_fields_for_outcome,
+    filter_record,
+    member_disbursement_fields,
+    restrict_fields,
+    select_clause,
+)
 from notice_match import normalize_apex_token, apex_matches_result, filter_results_by_apex
 from notice_progress import build_progress_props
 
@@ -78,6 +90,30 @@ _HANDOFF_MAX_AGE_SECONDS = 300
 _notice_pdf_cache: Dict[str, Dict[str, Any]] = {}
 _notice_pdf_lock = Lock()
 _NOTICE_MAX_AGE_SECONDS = 600
+GENERIC_NOTICE_CONTAINER = "lucycmnotices"
+GENERIC_NOTICE_BLOB_PREFIX = "generic-notices"
+
+_GENERIC_NOTICE_MEMBER_FIELDS = (
+    "new_estimatedsettlementamount",
+    "new_classworkweeks",
+    "cr7fe_classcountmetric",
+    "new_pagaweeks",
+    "cr7fe_pagacountmetric",
+    "new_projectcoordinator",
+    "new_potentialclassmemberstatus",
+    "new_settlementwebsitecm",
+)
+
+_GENERIC_NOTICE_FIELD_LABELS = {
+    "new_estimatedsettlementamount": "Estimated settlement amount",
+    "new_classworkweeks": "Class count",
+    "cr7fe_classcountmetric": "Class count metric",
+    "new_pagaweeks": "PAGA count",
+    "cr7fe_pagacountmetric": "PAGA count metric",
+    "new_projectcoordinator": "Project coordinator",
+    "new_potentialclassmemberstatus": "Member status",
+    "new_settlementwebsitecm": "Settlement website",
+}
 
 
 def _normalize_notice_apex_id(apex_id: Optional[str]) -> str:
@@ -115,6 +151,131 @@ def consume_recent_notice_pdf(apex_id: Optional[str]) -> Optional[Dict[str, Any]
             return None
         _notice_pdf_cache.pop(key, None)
         return entry
+
+
+def _looks_like_money_field(field_name: str) -> bool:
+    lowered = field_name.lower()
+    return "amount" in lowered or "settlement" in lowered
+
+
+def _format_generic_notice_member_value(field_name: str, value: Any) -> str:
+    if value is None or value == "":
+        return ""
+    if _looks_like_money_field(field_name):
+        try:
+            return f"${float(value):,.2f}"
+        except (TypeError, ValueError):
+            return str(value)
+    return str(value)
+
+
+def build_generic_notice_member_context(member_record: Optional[Dict[str, Any]]) -> str:
+    """Return user-safe context labels for generic notice fallback grounding."""
+    if not member_record:
+        return "No approved member-specific Dynamics context was available."
+
+    lines: List[str] = []
+    for field in _GENERIC_NOTICE_MEMBER_FIELDS:
+        value = _format_generic_notice_member_value(field, member_record.get(field))
+        if value:
+            lines.append(f"- {_GENERIC_NOTICE_FIELD_LABELS[field]}: {value}")
+
+    if not lines:
+        return (
+            "No approved member-specific settlement counts, status, or estimated "
+            "amount fields were available."
+        )
+    return "\n".join(lines)
+
+
+def _fetch_generic_notice_member_record(apex_id: str) -> Optional[Dict[str, Any]]:
+    if not DYNAMICS_ENABLED or not apex_id:
+        return None
+    try:
+        escaped_apex_id = apex_id.upper().replace("'", "''")
+        selected_fields = class_member_fields_for_outcome("status", include_internal=True)
+        result_str = query_entity_sync(
+            CLASS_MEMBER_ENTITY_SET,
+            filter_str=f"new_apexid eq '{escaped_apex_id}'",
+            select=select_clause(selected_fields),
+        )
+        result = json.loads(result_str)
+        if isinstance(result, list) and result:
+            return filter_record(result[0], selected_fields)
+    except Exception as member_err:
+        logger.warning("[Lucy] Failed to load member context for generic notice fallback: %s", member_err)
+    return None
+
+
+def _fetch_case_title_for_member(member_record: Optional[Dict[str, Any]]) -> str:
+    if not member_record:
+        return ""
+    case_guid = str(member_record.get("_new_case_value") or "").strip()
+    if not case_guid:
+        return ""
+    try:
+        result_str = query_entity_sync(
+            "incidents",
+            filter_str=f"incidentid eq '{case_guid}'",
+            select="incidentid,ticketnumber,title",
+        )
+        result = json.loads(result_str)
+        if isinstance(result, list) and result:
+            case = result[0]
+            return str(case.get("title") or case.get("ticketnumber") or "").strip()
+    except Exception as case_err:
+        logger.warning("[Lucy] Failed to resolve case title for generic notice fallback: %s", case_err)
+    return ""
+
+
+def _generic_notice_candidate_score(result: Dict[str, Any], case_title: str) -> int:
+    path = str(result.get("metadata_storage_path") or "").lower()
+    name = str(result.get("metadata_storage_name") or "").lower()
+    combined = f"{path} {name}"
+    score = 0
+    container_name = (
+        os.getenv("AZURE_GENERIC_NOTICE_CONTAINER")
+        or os.getenv("AZURE_STORAGE_CONTAINER_NAME")
+        or os.getenv("AZURE_STORAGE_CONTAINER")
+        or GENERIC_NOTICE_CONTAINER
+    ).lower()
+    if container_name in combined:
+        score += 100
+    if GENERIC_NOTICE_BLOB_PREFIX in combined:
+        score += 100
+    if "notice packet" in combined or "notice%20packet" in combined:
+        score += 50
+    if "generic" in combined:
+        score += 25
+    if "print" in combined:
+        score += 20
+    if "notice" in name:
+        score += 10
+    case_tokens = [t for t in re.split(r"[^a-z0-9]+", case_title.lower()) if len(t) > 2]
+    score += sum(1 for token in case_tokens if token in combined)
+    return score
+
+
+def _is_generic_notice_candidate(result: Dict[str, Any]) -> bool:
+    path = str(result.get("metadata_storage_path") or "").lower()
+    name = str(result.get("metadata_storage_name") or "").lower()
+    combined = f"{path} {name}"
+    container_name = (
+        os.getenv("AZURE_GENERIC_NOTICE_CONTAINER")
+        or os.getenv("AZURE_STORAGE_CONTAINER_NAME")
+        or os.getenv("AZURE_STORAGE_CONTAINER")
+        or GENERIC_NOTICE_CONTAINER
+    ).lower()
+    return any(
+        marker and marker in combined
+        for marker in (
+            GENERIC_NOTICE_BLOB_PREFIX,
+            "notice packet",
+            "notice%20packet",
+            "lucygenericnotices",
+            container_name if container_name != "lucycmnotices" else "",
+        )
+    )
 
 _HANDOFF_MESSAGE_VARIANTS = [
     "An APEX representative will join this chat within 5 minutes. If a representative is not able to join, please just reply back and I will set up a callback.",
@@ -639,6 +800,11 @@ _FIELD_ALIASES = {
     "new_phonenumber": ["new_phonenumber", "telephone1", "phone"],
 }
 
+_LUCY_PROFILE_UPDATE_ALLOWED_FIELDS = set(LUCY_CLASS_MEMBER_UPDATE_FIELDS)
+for _canonical_update_field in LUCY_CLASS_MEMBER_UPDATE_FIELDS:
+    _LUCY_PROFILE_UPDATE_ALLOWED_FIELDS.update(_FIELD_ALIASES.get(_canonical_update_field, ()))
+_LUCY_PROFILE_UPDATE_SYSTEM_FIELDS = set(LUCY_SYSTEM_WRITE_FIELDS)
+
 _ADDRESS_UPDATE_FIELDS = {
     "new_address",
     "new_address1",
@@ -828,6 +994,29 @@ def _resolve_update_fields(entity: str, updates: Dict[str, Any]) -> Dict[str, An
             resolved[key] = value
             logger.warning(f"⚠️ No matching field found for {key}; sending as-is")
     return resolved
+
+
+def _restrict_lucy_profile_updates(updates: Dict[str, Any]) -> Dict[str, Any]:
+    """Allow only COO-approved member profile fields through Lucy profile tools."""
+    allowed = _LUCY_PROFILE_UPDATE_ALLOWED_FIELDS | _LUCY_PROFILE_UPDATE_SYSTEM_FIELDS
+    return {key: value for key, value in updates.items() if key in allowed}
+
+
+def _canonicalize_lucy_profile_updates(updates: Dict[str, Any]) -> Dict[str, Any]:
+    """Normalize approved profile update aliases before Dynamics metadata mapping."""
+    canonical_by_input = {
+        field: field for field in LUCY_CLASS_MEMBER_UPDATE_FIELDS + LUCY_SYSTEM_WRITE_FIELDS
+    }
+    for canonical_field in LUCY_CLASS_MEMBER_UPDATE_FIELDS:
+        for alias in _FIELD_ALIASES.get(canonical_field, ()):
+            canonical_by_input.setdefault(alias, canonical_field)
+
+    canonical_updates: Dict[str, Any] = {}
+    for key, value in updates.items():
+        canonical_key = canonical_by_input.get(key)
+        if canonical_key:
+            canonical_updates[canonical_key] = value
+    return canonical_updates
 
 # Entity name and field mapping to handle specific naming conventions
 ENTITY_NAME_MAP = {
@@ -1326,17 +1515,14 @@ def update_member_profile_sync(apex_id: str, field_updates: Dict[str, Any]) -> s
         JSON string with update results
     """
     try:
-        # Whitelist of fields members can update
-        allowed_fields = [
-            'new_address', 'new_city', 'new_state', 'new_zip',
-            # Alternate/legacy field names for backward compatibility
-            'new_address1', 'new_stateorprovince', 'new_postalcode'
-        ]
+        # Whitelist of COO-approved fields members can update through Lucy.
+        allowed_fields = list(LUCY_CLASS_MEMBER_UPDATE_FIELDS)
 
-        # Filter to only allowed fields
-        safe_updates = {k: v for k, v in field_updates.items() if k in allowed_fields}
+        # Filter to approved fields while preserving legacy address aliases.
+        safe_updates = _canonicalize_lucy_profile_updates(field_updates)
         # Map to actual Dynamics field names if needed
         safe_updates = _resolve_update_fields("new_classmembers", safe_updates)
+        safe_updates = _restrict_lucy_profile_updates(safe_updates)
         if _has_address_update(safe_updates):
             coa_update, coa_error = _build_coa_reason_update("new_classmembers")
             if coa_error:
@@ -1990,24 +2176,14 @@ def setup_dynamics_functions():
 
         # Primary member information function (SECOND HIGHEST PRIORITY)
         get_class_member_details_sync,
-        get_member_cases_sync,
-        get_case_details_sync,
-        get_comprehensive_member_info_sync,
-
         # Document retrieval (CRITICAL FOR NOTICE REQUESTS)
         find_notice_for_user_sync,
 
-        # Essential disbursement functions
+        # Essential disbursement function (read-only COO-approved field view)
         get_member_disbursements_sync,
-        reissue_check_sync,
-        get_reissue_status_sync,
 
         # Profile management
         update_member_profile_fields_sync,  # Strict profile updates for authenticated members
-        update_reissue_check_requested_sync,  # Reissue check yes/no flag
-
-        # Field discovery
-        discover_entity_fields_sync,  # Discover available fields dynamically
 
         # Human handoff
         send_handoff_notification_email_sync,  # Initiate human handoff
@@ -2031,14 +2207,6 @@ def setup_dynamics_functions():
 
         # Monitoring and analytics
         monitoring_report_sync,  # Get authentication performance metrics
-
-        # Supporting functions (used by above functions)
-        query_entity_sync,
-        update_entity_sync,  # Only for reissue flag updates
-        get_entity_metadata_sync,
-        smart_query_entity_sync,  # For entity discovery fallback
-        auto_discover_entity_sync,  # For field discovery
-        discover_entities_sync,  # For entity listing
     ]
 
 def construct_incident_filter(incident_id: str, case_name: str) -> str:
@@ -3301,58 +3469,13 @@ def get_class_member_details_sync(apex_id: str, info_type: str = "all") -> str:
     """
     try:
         logger.info(f"🔍 Getting {info_type} information for member: {apex_id}")
-
-        # First, discover what fields are available in the class member entity
-        entity_info_str = auto_discover_entity_sync('classmember', context=f"Getting all available fields for member {apex_id}")
-        entity_info = json.loads(entity_info_str)
-
-        available_fields = []
-        if entity_info.get('success') and entity_info.get('fields'):
-            available_fields = entity_info['fields']
-            logger.info(f"Discovered {len(available_fields)} fields in class member entity")
-
-        # Query ALL fields or subset based on info_type
-        if info_type == "all" or not available_fields:
-            # Get everything
-            member_result_str = query_entity_sync('new_classmembers',
-                                                filter_str=f"new_apexid eq '{apex_id}'",
-                                                select=None)  # None means get all fields
-        else:
-            # Filter fields based on info_type
-            field_patterns = {
-                "settlement": ["settlement", "amount", "estimate", "calculation"],
-                "employment": ["hire", "term", "employ", "date", "rehire"],
-                "earnings": ["wage", "earning", "pay", "statement", "gross", "net"],
-                "disbursements": ["disbursement", "check", "payment", "void", "reissue"],
-                "status": ["status", "state", "active", "included", "eligible"],
-                "timeline": ["date", "created", "modified", "deadline", "cutoff"]
-            }
-
-            patterns = field_patterns.get(info_type, [])
-            relevant_fields = []
-
-            # Always include key identifier fields (but not PII)
-            core_fields = ["new_classmemberid", "new_apexid", "_new_case_value"]
-            relevant_fields.extend(core_fields)
-
-            # Add fields matching the patterns
-            for field in available_fields:
-                field_lower = field.lower()
-                if any(pattern in field_lower for pattern in patterns):
-                    relevant_fields.append(field)
-
-            # Remove duplicates while preserving order
-            seen = set()
-            unique_fields = []
-            for field in relevant_fields:
-                if field not in seen:
-                    seen.add(field)
-                    unique_fields.append(field)
-
-            select_str = ",".join(unique_fields) if unique_fields else None
-            member_result_str = query_entity_sync('new_classmembers',
-                                                filter_str=f"new_apexid eq '{apex_id}'",
-                                                select=select_str)
+        outcome = (info_type or "all").lower()
+        selected_fields = class_member_fields_for_outcome(outcome, include_internal=True)
+        member_result_str = query_entity_sync(
+            CLASS_MEMBER_ENTITY_SET,
+            filter_str=f"new_apexid eq '{apex_id}'",
+            select=select_clause(selected_fields),
+        )
 
         member_results = json.loads(member_result_str)
 
@@ -3363,6 +3486,7 @@ def get_class_member_details_sync(apex_id: str, info_type: str = "all") -> str:
             })
 
         member_data = member_results[0]
+        member_data = filter_record(member_data, selected_fields)
 
         # Process and organize the data
         organized_info = {
@@ -3520,7 +3644,7 @@ def get_member_disbursements_sync(apex_id: str, select_fields: Optional[str] = N
     """
     try:
         logger.info(f"🔍 Getting disbursements for member with ApexID: {apex_id} (Simplified Flow)")
-        member_select_fields = "new_classmemberid,new_apexid,_new_case_value"
+        member_select_fields = select_clause(class_member_fields_for_outcome("disbursements", include_internal=True))
         member_filter = f"new_apexid eq '{apex_id}'"
         logger.info(f"Querying 'new_classmembers' with filter: {member_filter}")
         member_result_str = query_entity_sync('new_classmembers', filter_str=member_filter, select=member_select_fields)
@@ -3576,13 +3700,17 @@ def get_member_disbursements_sync(apex_id: str, select_fields: Optional[str] = N
             "case_guid": member_data.get('_new_case_value')
         }
         logger.info(f"Found member with ApexID: {apex_id} (GUID: {member_guid})")
-        disbursement_entity = 'new_memberdisbursements'
+        disbursement_entity = MEMBER_DISBURSEMENT_ENTITY_SET
         disbursement_filter = f"_new_classmember_value eq {member_guid}"
-        default_disbursement_select = 'new_memberdisbursementid,new_checknumbertop,new_checkamount,new_checkdate,new_checkvoiddate,new_checkreissuerequest,new_checkcashed,new_name'
-        actual_select_fields = select_fields if select_fields else default_disbursement_select
+        allowed_disbursement_fields = member_disbursement_fields(include_internal=True)
+        requested_disbursement_fields = restrict_fields(select_fields, allowed_disbursement_fields)
+        actual_select_fields = select_clause(requested_disbursement_fields)
         logger.info(f"Querying '{disbursement_entity}' with filter: {disbursement_filter} and select: {actual_select_fields}")
         disbursements_result_str = query_entity_sync(disbursement_entity, filter_str=disbursement_filter, select=actual_select_fields)
-        disbursements_list = json.loads(disbursements_result_str)
+        disbursements_list = [
+            filter_record(record, allowed_disbursement_fields)
+            for record in json.loads(disbursements_result_str)
+        ]
         logger.info(f"✅ Found {len(disbursements_list)} disbursement(s) for member {apex_id}")
         return json.dumps({
             "success": True,
@@ -4945,6 +5073,10 @@ def find_notice_for_user_sync(apex_id: str) -> str:
 
             clean_apex_id = "".join(c for c in apex_id if c.isalnum())
             apex_token = normalize_apex_token(apex_id)
+            generic_fallback_used = False
+            generic_member_record: Optional[Dict[str, Any]] = None
+            generic_member_context = ""
+            generic_case_title = ""
 
             def _apply_apex_filter(
                 results: List[Dict[str, Any]],
@@ -5047,12 +5179,169 @@ def find_notice_for_user_sync(apex_id: str) -> str:
                 )
 
             if not results_list:
+                generic_member_record = _fetch_generic_notice_member_record(apex_id)
+                generic_case_title = _fetch_case_title_for_member(generic_member_record)
+                generic_member_context = build_generic_notice_member_context(generic_member_record)
+
+                if generic_case_title:
+                    generic_queries = [
+                        (GENERIC_NOTICE_BLOB_PREFIX, f'"{generic_case_title}" "{GENERIC_NOTICE_BLOB_PREFIX}"'),
+                        ("case_notice", f'"{generic_case_title}" "notice"'),
+                        ("case_title", generic_case_title),
+                    ]
+                    generic_results: List[Dict[str, Any]] = []
+                    for label, query in generic_queries:
+                        candidates = _run_search(
+                            query,
+                            f"generic_notice_{label}",
+                            search_fields=["chunk", "metadata_storage_name", "metadata_storage_path"],
+                            search_mode="all" if label != "case_title" else "any",
+                            top=15,
+                        )
+                        candidates = [candidate for candidate in candidates if _is_generic_notice_candidate(candidate)]
+                        if candidates:
+                            generic_results = sorted(
+                                candidates,
+                                key=lambda candidate: _generic_notice_candidate_score(candidate, generic_case_title),
+                                reverse=True,
+                            )
+                            break
+
+                    if generic_results:
+                        results_list = generic_results
+                        generic_fallback_used = True
+                        logger.info(
+                            "[Lucy] Notice lookup source_type=generic_notice_fallback apex_id=%s case=%s",
+                            clean_apex_id,
+                            generic_case_title,
+                        )
+
+            if not results_list:
                 extended_note = ""
                 if extended_search_used:
                     extended_note = (
                         "I ran a more extensive search to locate your notice "
                         "(this can take up to about 45 seconds).\n\n"
                     )
+                _update_progress("Checking case notice packet...", 75)
+                generic_member_record = _fetch_generic_notice_member_record(apex_id)
+                generic_case_title = _fetch_case_title_for_member(generic_member_record)
+                generic_results: List[Dict[str, Any]] = []
+                if generic_case_title:
+                    generic_queries = [
+                        (f'"{generic_case_title}" "Notice packet"', "generic_notice_case_exact", "all"),
+                        (f"{generic_case_title} notice packet", "generic_notice_case_terms", "any"),
+                        (f"{generic_case_title} notice", "generic_notice_case_notice", "any"),
+                    ]
+                    for generic_query, generic_label, generic_mode in generic_queries:
+                        generic_results = _run_search(
+                            generic_query,
+                            generic_label,
+                            search_fields=["chunk", "metadata_storage_name", "metadata_storage_path"],
+                            search_mode=generic_mode,
+                            top=8,
+                        )
+                        if generic_results:
+                            break
+
+                if generic_results:
+                    generic_results.sort(
+                        key=lambda result: _generic_notice_candidate_score(result, generic_case_title),
+                        reverse=True,
+                    )
+                    doc = generic_results[0]
+                    storage_account = os.getenv("AZURE_STORAGE_ACCOUNT_NAME")
+                    if not storage_account:
+                        logger.error("AZURE_STORAGE_ACCOUNT_NAME not set")
+                        return "ERROR: Storage account not configured"
+                    generic_container_name = (
+                        os.getenv("LUCY_GENERIC_NOTICE_CONTAINER")
+                        or os.getenv("AZURE_GENERIC_NOTICE_CONTAINER")
+                        or GENERIC_NOTICE_CONTAINER
+                    )
+
+                    storage_path = _sanitize_storage_path(doc.get("metadata_storage_path") or "")
+                    storage_name = _sanitize_storage_path(doc.get("metadata_storage_name") or "").lstrip("/")
+                    generic_candidate_paths: List[str] = []
+
+                    if storage_path:
+                        from urllib.parse import urlparse
+
+                        if storage_path.lower().startswith("http"):
+                            parsed = urlparse(storage_path)
+                            cleaned_path = _sanitize_storage_path(parsed.path).lstrip("/")
+                            if cleaned_path and cleaned_path.lower().endswith(".pdf"):
+                                if not cleaned_path.lower().startswith(f"{generic_container_name.lower()}/"):
+                                    cleaned_path = f"{generic_container_name}/{cleaned_path}"
+                                generic_candidate_paths.append(cleaned_path)
+                        elif storage_path.lower().endswith(".pdf"):
+                            cleaned_path = storage_path.lstrip("/")
+                            if not cleaned_path.lower().startswith(f"{generic_container_name.lower()}/"):
+                                cleaned_path = f"{generic_container_name}/{cleaned_path}"
+                            generic_candidate_paths.append(cleaned_path)
+
+                    if storage_name and storage_name.lower().endswith(".pdf"):
+                        candidate = storage_name
+                        if not candidate.lower().startswith(f"{generic_container_name.lower()}/"):
+                            candidate = f"{generic_container_name}/{candidate}"
+                        if candidate not in generic_candidate_paths:
+                            generic_candidate_paths.append(candidate)
+
+                    generic_blob_url = None
+                    for candidate in generic_candidate_paths:
+                        if _looks_like_markdown_path(candidate):
+                            continue
+                        generic_blob_url = f"https://{storage_account}.blob.core.windows.net/{candidate}"
+                        logger.info("[Lucy] Generic notice candidate blob URL: %s", generic_blob_url)
+                        break
+
+                    if generic_blob_url:
+                        generic_sas_url = generate_sas_url(generic_blob_url)
+                        if generic_sas_url and not generic_sas_url.startswith("ERROR"):
+                            generic_pdf_name = (
+                                storage_name.split("/")[-1]
+                                if storage_name and storage_name.lower().endswith(".pdf")
+                                else "Notice packet.pdf"
+                            )
+                            record_notice_pdf(apex_id, generic_sas_url, generic_pdf_name, display="side")
+                            generic_chunks = [
+                                str(result.get("chunk") or "").strip()
+                                for result in generic_results
+                                if str(result.get("chunk") or "").strip()
+                            ]
+                            generic_notice_text = "\n\n".join(generic_chunks)
+                            generic_member_context = build_generic_notice_member_context(generic_member_record)
+                            _update_progress("Done", 100)
+                            return f"""{extended_note}I found the generic notice packet for this case and can use it with your approved member details.
+
+NOTICE_SOURCE_TYPE: generic_notice_fallback
+CASE_NOTICE_SOURCE: Print/Notice packet
+CASE_NAME: {generic_case_title}
+
+📄 **[{generic_pdf_name} - Click to Download]({generic_sas_url})**
+
+**GENERIC NOTICE CONTENT:**
+<NOTICE_CONTENT>
+{generic_notice_text}
+</NOTICE_CONTENT>
+
+**APPROVED MEMBER CONTEXT:**
+{generic_member_context}
+
+Please explain the case notice in plain language using the generic notice content as the grounding source. Use the approved member context only for member-specific details such as estimated amount, class/PAGA counts, and status. Do not imply that an individualized notice PDF was found.
+
+**PDF_DISPLAY_INFO:**
+- PDF_URL: {generic_sas_url}
+- PDF_NAME: {generic_pdf_name}
+- DISPLAY_MODE: side"""
+                        logger.warning("[Lucy] Could not generate SAS for generic notice fallback")
+
+                logger.info(
+                    "[Lucy] Generic notice fallback unavailable for Apex ID %s; case_title=%s results=%s",
+                    apex_id,
+                    generic_case_title or "<missing>",
+                    len(generic_results),
+                )
                 _update_progress("Done", 100)
                 return (
                     f"{extended_note}I couldn't find a notice document for APEX ID {apex_id}. "
@@ -5203,6 +5492,31 @@ def find_notice_for_user_sync(apex_id: str) -> str:
 
                 _update_progress("Done", 100)
 
+                if generic_fallback_used:
+                    case_label = generic_case_title or "this case"
+                    return f"""I wasn't able to find your individualized notice PDF, so I found the generic notice packet for **{case_label}** instead.
+
+📄 **[{pdf_display_name} - Click to Download]({download_url})**
+
+You should see the generic notice open in the side panel. I'll use that document to explain the case in plain language, then use the approved member-specific values from Dynamics for your own details.
+
+**NOTICE_SOURCE_TYPE:** generic_notice_fallback
+
+**APPROVED MEMBER-SPECIFIC DYNAMICS CONTEXT:**
+{generic_member_context}
+
+**GENERIC NOTICE CONTENT:**
+<NOTICE_CONTENT>
+{full_rag_content}
+</NOTICE_CONTENT>
+
+Please explain the generic notice in simple, ELI5-style language. Be transparent that this is the generic case notice, not an individualized member notice. Use only the Dynamics context above for member-specific amounts, counts, metrics, status, or website details.
+
+**PDF_DISPLAY_INFO:**
+- PDF_URL: {sas_url}
+- PDF_NAME: {pdf_display_name}
+- DISPLAY_MODE: side"""
+
                 # Return structured response with PDF URL for agent to handle
                 return f"""{extended_note}I've found your notice **{clean_apex_id}**! Here's what I can tell you:
 
@@ -5224,6 +5538,24 @@ Let me now provide you with a comprehensive, intelligent summary of the importan
 - DISPLAY_MODE: side"""
             else:
                 _update_progress("Done", 100)
+                if generic_fallback_used:
+                    case_label = generic_case_title or "this case"
+                    return f"""I wasn't able to find your individualized notice PDF, so I found the generic notice packet for **{case_label}** instead.
+
+📄 **[{pdf_display_name} - Click to Download]({download_url})**
+
+You should see the generic notice open in the side panel. I can explain the case from that document and use the approved Dynamics values below for your member-specific details.
+
+**NOTICE_SOURCE_TYPE:** generic_notice_fallback
+
+**APPROVED MEMBER-SPECIFIC DYNAMICS CONTEXT:**
+{generic_member_context}
+
+**PDF_DISPLAY_INFO:**
+- PDF_URL: {sas_url}
+- PDF_NAME: {pdf_display_name}
+- DISPLAY_MODE: side"""
+
                 # Return structured response with PDF URL for agent to handle
                 return f"""{extended_note}I've found your notice **{clean_apex_id}**!
 
