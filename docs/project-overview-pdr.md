@@ -89,7 +89,7 @@ This repository operates under a **strict spec-driven workflow** defined in [`AG
 
 1. Read `state/refactor-ledger.md` first.
 2. Pick the lowest-numbered incomplete plan in `plans/` (read **exactly one** active plan).
-3. Use the source-of-truth hierarchy: explicit user instruction → `AGENTS.md` → active plan → existing code patterns.
+3. Use the source-of-truth hierarchy: explicit user instruction → `AGENTS.md` → `/TASKS.md` → active plan → existing code patterns.
 4. Update the ledger after every completed or blocked plan.
 
 Currently `plans/` and `state/refactor-ledger.md` are uninitialized; the workflow becomes binding the moment plans are added. Do not start parallel write-heavy work that crosses plan boundaries. Do not "improve adjacent things."

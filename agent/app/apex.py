@@ -2546,7 +2546,7 @@ def _extract_pdf_info_from_text(text: str) -> Optional[dict]:
         return None
 
 
-def _classify_notice_tool_output(output: Any) -> str:
+def _classify_notice_tool_output(output: Any) -> Optional[str]:
     """Classify notice tool output so a miss does not keep re-triggering lookup."""
     text = str(output or "").strip()
     if not text:
@@ -2572,14 +2572,15 @@ def _classify_notice_tool_output(output: Any) -> str:
         "wasn't able to locate",
         "was not able to locate",
         "no notice document",
-        "notice document for apex id",
     )
     if any(marker in lowered for marker in miss_markers):
         return "not_found"
 
     if lowered.startswith("error"):
         return "unknown"
-    return "answered"
+
+    # Return None for ambiguous/non-terminal output instead of "answered"
+    return None
 
 
 def _record_notice_lookup_status(status: str, output: Any = None) -> None:
@@ -2595,6 +2596,9 @@ def _record_notice_lookup_status(status: str, output: Any = None) -> None:
             cl.user_session.set("notice_lookup_apex_id", str(apex_id))
         if status == "not_found" and output:
             cl.user_session.set("notice_lookup_last_miss", str(output)[:1000])
+        elif status in {"pdf_found", "found", "answered"}:
+            # Clear miss marker on successful lookup
+            cl.user_session.set("notice_lookup_last_miss", "")
         logger.info("📌 Notice lookup terminal status recorded: %s", status)
     except Exception as e:
         logger.warning("⚠️ Could not record notice lookup status: %s", e)
