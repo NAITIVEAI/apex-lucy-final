@@ -2546,6 +2546,64 @@ def _extract_pdf_info_from_text(text: str) -> Optional[dict]:
         return None
 
 
+def _classify_notice_tool_output(output: Any) -> Optional[str]:
+    """Classify notice tool output so a miss does not keep re-triggering lookup."""
+    text = str(output or "").strip()
+    if not text:
+        return "unknown"
+    if _extract_pdf_info_from_text(text):
+        return "pdf_found"
+
+    lowered = text.lower()
+    found_markers = (
+        "notice_source_type: generic_notice_fallback",
+        "generic notice packet",
+        "i've found your notice",
+        "i found your notice",
+        "found your notice",
+        "based on the indexed content",
+    )
+    if any(marker in lowered for marker in found_markers):
+        return "found"
+
+    miss_markers = (
+        "couldn't find a notice",
+        "could not find a notice",
+        "wasn't able to locate",
+        "was not able to locate",
+        "no notice document",
+    )
+    if any(marker in lowered for marker in miss_markers):
+        return "not_found"
+
+    if lowered.startswith("error"):
+        return "unknown"
+
+    # Return None for ambiguous/non-terminal output instead of "answered"
+    return None
+
+
+def _record_notice_lookup_status(status: str, output: Any = None) -> None:
+    """Persist terminal notice lookup state for later turns."""
+    if status not in {"pdf_found", "found", "not_found", "answered"}:
+        return
+    try:
+        cl.user_session.set("pending_notice_request", None)
+        cl.user_session.set("pending_notice_request_text", None)
+        cl.user_session.set("notice_lookup_status", status)
+        apex_id = cl.user_session.get("apex_id")
+        if apex_id:
+            cl.user_session.set("notice_lookup_apex_id", str(apex_id))
+        if status == "not_found" and output:
+            cl.user_session.set("notice_lookup_last_miss", str(output)[:1000])
+        elif status in {"pdf_found", "found", "answered"}:
+            # Clear miss marker on successful lookup
+            cl.user_session.set("notice_lookup_last_miss", "")
+        logger.info("📌 Notice lookup terminal status recorded: %s", status)
+    except Exception as e:
+        logger.warning("⚠️ Could not record notice lookup status: %s", e)
+
+
 def _hash_url(url: Optional[str]) -> str:
     if not url:
         return "none"
@@ -2725,6 +2783,8 @@ def _build_authenticated_state_items() -> List[Dict[str, Any]]:
         metadata={
             "pending_notice_request": bool(cl.user_session.get("pending_notice_request")),
             "pending_notice_request_text": cl.user_session.get("pending_notice_request_text") or "",
+            "notice_lookup_status": cl.user_session.get("notice_lookup_status") or "",
+            "notice_lookup_apex_id": cl.user_session.get("notice_lookup_apex_id") or "",
         },
     )
     return _lucy_build_authenticated_state_items(session)
@@ -2788,6 +2848,12 @@ async def _run_response_v2(user_text: str) -> Dict[str, Any]:
         authenticated=bool(cl.user_session.get("authenticated")),
         apex_id=cl.user_session.get("apex_id"),
         user_name=cl.user_session.get("user_name"),
+        metadata={
+            "pending_notice_request": bool(cl.user_session.get("pending_notice_request")),
+            "pending_notice_request_text": cl.user_session.get("pending_notice_request_text") or "",
+            "notice_lookup_status": cl.user_session.get("notice_lookup_status") or "",
+            "notice_lookup_apex_id": cl.user_session.get("notice_lookup_apex_id") or "",
+        },
     )
 
     result = await _lucy_run_response_v2(
@@ -2805,6 +2871,15 @@ async def _run_response_v2(user_text: str) -> Dict[str, Any]:
         cl.user_session.set("previous_response_id", session.previous_response_id)
     if session.last_eval_final_response_id is not None:
         cl.user_session.set("last_eval_final_response_id", session.last_eval_final_response_id)
+    for metadata_key in (
+        "pending_notice_request",
+        "pending_notice_request_text",
+        "notice_lookup_status",
+        "notice_lookup_apex_id",
+        "notice_lookup_last_miss",
+    ):
+        if metadata_key in session.metadata:
+            cl.user_session.set(metadata_key, session.metadata.get(metadata_key))
 
     return result
 
@@ -4992,7 +5067,12 @@ async def main(message: cl.Message):
                                     cl.user_session.set("user_name", full_name)
 
                         if name == "find_notice_for_user_sync" and output:
-                            pdf_tool_outputs.append(str(output))
+                            notice_output = str(output)
+                            notice_status = _classify_notice_tool_output(notice_output)
+                            if notice_status == "pdf_found":
+                                pdf_tool_outputs.append(notice_output)
+                            if notice_status in {"pdf_found", "found", "not_found", "answered"}:
+                                _record_notice_lookup_status(notice_status, notice_output)
 
                         if name in {
                             "send_handoff_notification_email_sync",
@@ -5023,14 +5103,21 @@ async def main(message: cl.Message):
                             try:
                                 from user_functions import find_notice_for_user_sync
                                 forced_notice_output = find_notice_for_user_sync(str(apex_id))
-                                if forced_notice_output:
+                                notice_status = _classify_notice_tool_output(forced_notice_output)
+                                if notice_status == "pdf_found":
                                     pdf_tool_outputs.append(str(forced_notice_output))
                                     notice_request_satisfied = True
+                                elif notice_status in {"found", "not_found", "answered"}:
+                                    notice_request_satisfied = True
+                                else:
+                                    forced_notice_output = None
                             except Exception as notice_err:
                                 logger.warning(f"⚠️ Forced notice retrieval failed: {notice_err}")
                         if notice_request_satisfied:
-                            cl.user_session.set("pending_notice_request", None)
-                            cl.user_session.set("pending_notice_request_text", None)
+                            _record_notice_lookup_status(
+                                _classify_notice_tool_output(forced_notice_output),
+                                forced_notice_output,
+                            )
                         else:
                             logger.info("📌 Keeping pending notice request for the next turn.")
 
@@ -5254,13 +5341,15 @@ async def main(message: cl.Message):
                                     if function_name in {"find_notice_for_user_sync"}:
                                         output = getattr(function_call, "output", None) if function_call else None
                                         if output:
-                                            if isinstance(output, (list, tuple)):
-                                                pdf_tool_outputs.extend([str(o) for o in output])
-                                            else:
-                                                pdf_tool_outputs.append(str(output))
-                                            logger.info(
-                                                f"🔍 Captured PDF tool output from {function_name}"
-                                            )
+                                            outputs = output if isinstance(output, (list, tuple)) else [output]
+                                            for raw_output in outputs:
+                                                notice_output = str(raw_output)
+                                                notice_status = _classify_notice_tool_output(notice_output)
+                                                if notice_status == "pdf_found":
+                                                    pdf_tool_outputs.append(notice_output)
+                                                if notice_status in {"pdf_found", "found", "not_found", "answered"}:
+                                                    _record_notice_lookup_status(notice_status, notice_output)
+                                            logger.info(f"🔍 Captured notice tool output from {function_name}")
                                     if function_name in {
                                         "send_handoff_notification_email_sync",
                                         "request_human_assistance_sync",
@@ -5307,15 +5396,23 @@ async def main(message: cl.Message):
                             try:
                                 from user_functions import find_notice_for_user_sync
                                 forced_notice_output = find_notice_for_user_sync(str(apex_id))
-                                if forced_notice_output:
+                                notice_status = _classify_notice_tool_output(forced_notice_output)
+                                if notice_status == "pdf_found":
                                     pdf_tool_outputs.append(str(forced_notice_output))
                                     notice_request_satisfied = True
                                     logger.info("✅ Forced notice retrieval after missing tool call")
+                                elif notice_status in {"found", "not_found", "answered"}:
+                                    notice_request_satisfied = True
+                                    logger.info("✅ Forced notice retrieval after missing tool call")
+                                else:
+                                    forced_notice_output = None
                             except Exception as notice_err:
                                 logger.warning(f"⚠️ Forced notice retrieval failed: {notice_err}")
                         if notice_request_satisfied:
-                            cl.user_session.set("pending_notice_request", None)
-                            cl.user_session.set("pending_notice_request_text", None)
+                            _record_notice_lookup_status(
+                                _classify_notice_tool_output(forced_notice_output),
+                                forced_notice_output,
+                            )
                         else:
                             logger.info("📌 Keeping pending notice request for the next turn.")
     

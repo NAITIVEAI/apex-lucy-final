@@ -18,7 +18,7 @@ Apex-Lucy-Final/
   docs/                   Architecture, integration, executive, handoff, portal-guide docs
   plans/                  Active spec-driven plan files (currently empty/uninitialized)
   state/                  refactor-ledger.md and other workflow state (empty/uninitialized)
-  .agents/                Custom skills, including .agents/skills/lucy-spec-implementation/
+  .agents/                Local/custom agent skill workspace
   learn/                  Scout reports and autoresearch artifacts
   removal/                Non-runtime artifacts moved out of the runtime surface
   AGENTS.md               Spec-driven workflow contract (mandatory reading)

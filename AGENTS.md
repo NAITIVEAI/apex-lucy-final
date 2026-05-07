@@ -20,8 +20,6 @@ This is a bounded implementation update, not a platform redesign.
    - use the plan already marked in progress, or
    - select the lowest-numbered incomplete plan in `/plans/`
 4. Read **exactly one** active `/plans/*.md` file
-5. Load and follow the skill:
-   - `.agents/skills/lucy-spec-implementation/SKILL.md`
 
 Do **not** read future plan files unless:
 - the current plan is completed, or
@@ -37,8 +35,7 @@ When instructions conflict, use this order:
 2. This `AGENTS.md`
 3. `/TASKS.md`
 4. The active `/plans/*.md` file
-5. `.agents/skills/lucy-spec-implementation/SKILL.md`
-6. Existing code patterns and typed constants already present in the repo
+5. Existing code patterns and typed constants already present in the repo
 
 For implementation behavior, prefer:
 - actual code
@@ -463,3 +460,13 @@ Do **not** use judgment to:
 - guess evolving SDK behavior
 - guess schema names
 - move to the next plan early
+
+## graphify
+
+This project has a graphify knowledge graph at graphify-out/.
+
+Rules:
+- Before answering architecture or codebase questions, read graphify-out/GRAPH_REPORT.md for god nodes and community structure
+- If graphify-out/wiki/index.md exists, navigate it instead of reading raw files
+- For cross-module "how does X relate to Y" questions, prefer `graphify query "<question>"`, `graphify path "<A>" "<B>"`, or `graphify explain "<concept>"` over grep — these traverse the graph's EXTRACTED + INFERRED edges instead of scanning files
+- After modifying code files in this session, run `graphify update .` to keep the graph current (AST-only, no API cost)

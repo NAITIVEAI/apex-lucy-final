@@ -41,7 +41,24 @@ node_modules/
 
 # OpenMemory - IDE/Assistant specific rules
 .cursor/rules/openmemory.mdc
+.cursor/
 CLAUDE.md
 AGENTS.md
+KNOWNS.md
 
 .worktrees/
+*.db-shm
+*.db-wal
+
+# Local assistant/tool state
+.agent/
+.agents/
+.codex/
+.claude/
+.knowns/
+.omc/
+.mcp.json
+.graphifyignore
+opencode.json
+OPENCODE.md
+graphify-out/

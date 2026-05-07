@@ -131,7 +131,7 @@ A handful of Lucy's tools call `cl.user_session.set/get` or `cl.Message` for UI 
 **Blockers:** none.
 
 **Follow-ups identified:**
-- `.agents/skills/lucy-spec-implementation/SKILL.md` is referenced by AGENTS.md but does not exist. Track as plan 003 candidate.
+- RESOLVED 2026-05-02: `.agents/skills/lucy-spec-implementation/SKILL.md` was a stale/unmaterialized workflow scaffold. It is no longer part of the active workflow contract; historical references are retained here only as breadcrumb context.
 - Repo hygiene: `.hermes/` (other agent runtime), `.fusion/` (memory artifacts), parallel `.agent/skills/` and `.agents/skills/` directories. Track as plan 003 candidate.
 - Phase 0 production safety prereqs from plan 001 (portal API auth, `AZURE_TRACING_GEN_AI_CONTENT_RECORDING_ENABLED` default, ACA health probes, storage hardening) — independent of runtime extraction. Track as plan 004 candidate.
 - Phase 7 (Chainlit local-runtime vs Hosted-Agent-endpoint decision) is moot under the AI Gateway path; Chainlit always calls `LucyRuntime` in-process.
@@ -559,18 +559,82 @@ Follow-up:
       and activated `agent-lucy-hosted-ncus:8`.
     - SDK smoke against version 8 returned `status=completed`, `error=None`,
       response id `caresp_e39cb37ecf44b94e00mYcReQTjjYUncDkYOEfos8b2puEO5mrd`.
-    - App Insights KQL for the v8 response shows:
-      `Foundry v2 agent loaded from reconciled publication state:
-      agent-lucy-prod:1 (agent-lucy-prod/agent-lucy-prod)`, no new
-      `AuthorizationFailed` / `applications/write` error, startup
-      `search_connection_id_set=True`, and `Dashboard routes disabled for this
-      process` instead of the previous dashboard-route error.
-    - User-observed portal state after v8: Lucy is "prestable, barely."
-      The main Foundry/App Insights ops dashboard is still not populating
-      reliably, but the metrics under the specific Agent surface are
-      populating. Treat raw App Insights KQL plus the Agent metrics surface as
-      the current proof path; do not claim the top-level ops dashboard is fixed
-      until it is visibly populated in the portal.
+  - App Insights KQL for the v8 response shows:
+    `Foundry v2 agent loaded from reconciled publication state:
+    agent-lucy-prod:1 (agent-lucy-prod/agent-lucy-prod)`, no new
+    `AuthorizationFailed` / `applications/write` error, startup
+    `search_connection_id_set=True`, and `Dashboard routes disabled for this
+    process` instead of the previous dashboard-route error.
+  - User-observed portal state after v8: Lucy is "prestable, barely."
+    The main Foundry/App Insights ops dashboard is still not populating
+    reliably, but the metrics under the specific Agent surface are
+    populating. Treat raw App Insights KQL plus the Agent metrics surface as
+    the current proof path; do not claim the top-level ops dashboard is fixed
+    until it is visibly populated in the portal.
+  - Added a COO-safe fallback runbook at
+    `docs/operations/hosted-agent-observability-fallback.md` with raw KQL for
+    `AppRequests`, `AppDependencies`, and `AppMetrics`, and linked it from the
+    hosted-agent README plus the gateway registration guide.
+  - Live verification 2026-04-29 18:51-18:52 UTC:
+    - Ran 3 Hosted responses smoke calls against
+      `agent-lucy-hosted-ncus` v8 using the Responses endpoint and a bearer
+      token acquired with the `https://ai.azure.com/.default` scope.
+    - Returned successful completions:
+      `caresp_d72480775d7bbdec00LSpqOlGHP7vcqT20tDih4FOV7dha2c9G`,
+      `caresp_2d928c9351039b9100QW3KpxbZ6DhhFu1SEj817E5SQqhQdvjM`, and
+      `caresp_4c66a25d360b37e00021XSuH64mXL1fCwp8GHWuSC4VP49l7Pn`.
+    - AppRequests rows landed for all 3 calls with canonical
+      `gen_ai.agent.name=agent-lucy-hosted-ncus`,
+      `gen_ai.agent.id=agent-lucy-hosted-ncus:8`, and
+      `gen_ai.agent.version=8`.
+    - AppDependencies rows landed for the same smoke window, including
+      `create_agent`, `invoke_agent agent-lucy-prod:1`, `execute_tool`, and
+      `chat gpt-5.2-2025-12-11`.
+    - AppMetrics still shows only `_APPRESOURCEPREVIEW_` rows with
+      `service.name=agent-lucy-hosted-ncus`; treat that as metrics ingestion
+      evidence, not as proof that the top-level portal workbook is fixed.
+  - Foundry v2 permissions audit and RBAC fix 2026-04-29 19:09 UTC:
+    - Rechecked current Microsoft docs before changing RBAC. Confirmed the
+      split between ARM/control-plane roles and Foundry data-plane roles:
+      Owner/Contributor alone do not grant agent data-plane operations, the
+      project managed identity needs `Azure AI User` on the Foundry account
+      for project-endpoint model access, agent identities need `Azure AI User`
+      on the project for inferencing, and Log Analytics query access requires
+      workspace query/data read permission.
+    - Live audit confirmed these existing assignments were already correct:
+      NCUS hosted runtime identity
+      `bf64d26c-34a5-4bc8-a1b2-b22e9ff24b67` has `Azure AI User` and
+      `Azure AI Project Manager` at the NCUS project scope; NCUS project
+      managed identity `d4f3d82d-0056-4e6f-93f8-d1be9b049d94` has `AcrPull`
+      at the NCUS ACR scope.
+    - Added missing least-privilege assignments:
+      - `Azure AI User` for EUS2 project managed identity
+        `84e7a5d5-8c91-4e05-905f-34b3632eef91` at Foundry account scope
+        `/subscriptions/22f9f915-587f-4a9a-acff-69b061ef48e1/resourceGroups/agent-lucy-eus2/providers/Microsoft.CognitiveServices/accounts/agent-lucy-foundry-eus2`.
+      - `Log Analytics Data Reader` for NCUS project managed identity
+        `d4f3d82d-0056-4e6f-93f8-d1be9b049d94` at workspace scope
+        `managed-agent-lucy-appins-eus2-ws`.
+      - `Log Analytics Data Reader` for EUS2 project managed identity
+        `84e7a5d5-8c91-4e05-905f-34b3632eef91` at workspace scope
+        `managed-agent-lucy-appins-eus2-ws`.
+      - `Azure AI User` for NCUS project-level agent service identity
+        `ac052192-ae57-46b0-a016-41ed16bd41d7` at NCUS project scope.
+      - `Azure AI User` for NCUS `agent-lucy-prod` agent service identity
+        `9652f540-f4d3-4d24-bcb0-674278092075` at NCUS project scope.
+    - Post-change verification:
+      - ARM role-assignment reads confirmed all five assignments at the target
+        scopes.
+      - Hosted Responses smoke against `agent-lucy-hosted-ncus` v8 completed:
+        `caresp_636fb40fa620450200WRrPh8hRdk09hoNgk4hC0xWx8n3uAesI`, output
+        `Lucy hosted RBAC is ready.`
+      - Log Analytics query against workspace
+        `4f6a12ab-ccc6-4079-a953-0a9a479eea81` confirmed a fresh
+        `AppRequests` row at `2026-04-29T19:09:00Z` with
+        `gen_ai.agent.name=agent-lucy-hosted-ncus`,
+        `gen_ai.agent.id=agent-lucy-hosted-ncus:8`, and `Success=True`.
+      - `AppDependencies` for the same smoke window confirmed successful
+        `create_agent`, `execute_tool`, `invoke_agent agent-lucy-prod:1`, and
+        `chat gpt-5.2-2025-12-11` spans.
 - Member-facing ACA operational update 2026-04-29:
   - Disabled GenAI content recording on `agent-lucy-eus2` by setting
     `AZURE_TRACING_GEN_AI_CONTENT_RECORDING_ENABLED=false`.
@@ -634,14 +698,529 @@ Follow-up:
       Hosted disables Chainlit/dashboard routes and did not show that failure.
     - Hosted version definitions still copy secret-bearing environment values;
       keep config migration/rotation as a separate production-hardening task.
-- Gateway/APIM route remains the rollback and diagnostics bridge until Hosted
-  Agent parity is proven.
+- SUPERSEDED 2026-05-04: the Gateway/APIM route was later retired and deleted
+  after the team abandoned the AI Gateway path.
+
+**Hosted Agent routing/observability canary 2026-04-29 — DEPLOYED / SMOKE PASSED:**
+- Built and pushed NCUS Hosted image
+  `agentlucyacrncus.azurecr.io/agent-lucy-hosted:hosted-20260429121955-routing-rbac`
+  (`sha256:189cefe52f3529aad11753d4beedf2a108a0dc362cdc1afedc9641a9e5e3056f`).
+- Created and activated Hosted Agent version `agent-lucy-hosted-ncus:9` from
+  the version 8 environment definition, preserving the existing runtime config
+  while pinning hosted telemetry defaults:
+  `LUCY_OTEL_AGENT_ID=agent-lucy-hosted-ncus`,
+  `AZURE_TRACING_GEN_AI_CONTENT_RECORDING_ENABLED=false`,
+  `LUCY_CHAINLIT_ENABLED=false`, `LUCY_DASHBOARD_ROUTES_ENABLED=false`, and
+  `OTEL_SERVICE_NAME=lucy-hosted-agent`.
+- Hosted Responses smoke against `agent-lucy-hosted-ncus` v9 completed:
+  response id `caresp_1090afbe0a85d00800je4gPxhp4UKP1RrwZ5MKXt7RpksYecv4`,
+  status `completed`, output `Lucy hosted routing is ready.`
+- Log Analytics query against workspace
+  `4f6a12ab-ccc6-4079-a953-0a9a479eea81` confirmed a fresh
+  `AppRequests` row at `2026-04-29T19:24:33Z` with
+  `Name=invoke_agent agent-lucy-hosted-ncus:9`,
+  `gen_ai.agent.name=agent-lucy-hosted-ncus`,
+  `gen_ai.agent.id=agent-lucy-hosted-ncus:9`, and `Success=True`.
+- `AppDependencies` for the same smoke window confirmed successful
+  `execute_tool` and `chat gpt-5.2-2025-12-11` rows. The `execute_tool` row
+  carries `gen_ai.agent.name=agent-lucy-hosted-ncus` and
+  `gen_ai.agent.id=agent-lucy-hosted-ncus:9`.
+- Live verification 2026-04-29 22:11 UTC:
+  - Re-ran raw App Insights KQL against workspace
+    `4f6a12ab-ccc6-4079-a953-0a9a479eea81`.
+  - `AppRequests` still shows fresh v9 rows with canonical dimensions, most
+    recently `invoke_agent agent-lucy-hosted-ncus:9` at
+    `2026-04-29T22:11:16.560753Z` with
+    `gen_ai.agent.name=agent-lucy-hosted-ncus`,
+    `gen_ai.agent.id=agent-lucy-hosted-ncus:9`, and
+    `gen_ai.agent.version=9`.
+  - `AppDependencies` still shows the expected hosted row mix, including
+    `create_agent`, `execute_tool`, `invoke_agent agent-lucy-prod:1`, and
+    `chat gpt-5.2-2025-12-11`; v9 rows were present with counts
+    `create_agent=2` and `execute_tool=1`.
+  - `AppMetrics` still returns preview metric rows
+    (`_APPRESOURCEPREVIEW_`, `Item_Success_Count`), which is telemetry
+    ingestion evidence only. The top-level workbook remains a portal issue
+    until directly confirmed in the UI.
+  - Fresh smoke batch 2026-04-29 22:59-23:00 UTC:
+    - Ran 3 additional Hosted Responses calls against
+      `agent-lucy-hosted-ncus` v9.
+    - `AppRequests` now shows the new v9 request rows at
+      `2026-04-29T22:59:36.604418Z`,
+      `2026-04-29T22:59:59.437101Z`, and
+      `2026-04-29T23:00:12.137587Z`, all with
+      `gen_ai.agent.name=agent-lucy-hosted-ncus`,
+      `gen_ai.agent.id=agent-lucy-hosted-ncus:9`, and
+      `gen_ai.agent.version=9`.
+    - `AppDependencies` now shows `create_agent=4` and `execute_tool=3` for
+      v9 in the fresh 2h query window, with the expected `agent-lucy-prod:2`
+      and `chat gpt-5.2-2025-12-11` dependencies also present.
+- Focused code validation before deployment:
+  `python -m pytest agent/tests/test_lucy_responses_loop.py agent/tests/test_lucy_runtime.py agent/tests/test_notice_tool_instructions.py agent/tests/test_coa_reason_writeback.py agent/tests/test_hosted_agent_adapter.py -q`
+  returned `49 passed`; `python -m py_compile agent/app/apex.py agent/app/lucy_core/responses_loop.py agent/app/user_functions.py agent/hosted_agent/app.py`
+  passed.
+
+**Hosted stale-conversation and notice follow-up repair 2026-04-29 — DEPLOYED / SMOKE PASSED:**
+- Triggering evidence:
+  - Screenshot review showed Lucy authenticated correctly, failed to find a
+    notice PDF, offered to help from other records, then repeated notice lookup
+    on a follow-up asking about the case itself.
+  - Raw App Insights at 2026-04-29 22:11 UTC showed a hosted request with an
+    inner `create_agent` dependency failure: `conversation_not_found`.
+- Code changes:
+  - `agent/app/lucy_core/responses_loop.py`
+    - Records terminal `find_notice_for_user_sync` outcomes in
+      `LucySession.metadata`.
+    - Injects authenticated session state telling Lucy to use Dynamics
+      member/case/disbursement tools after a notice miss instead of retrying the
+      notice/PDF tool for case, eligibility, payment, status, or next-step
+      follow-ups.
+    - Detects stale Responses `conversation_not_found` errors on the initial
+      request, clears `session.conversation_id` and
+      `session.previous_response_id`, and retries once with a fresh
+      `agent_reference`.
+  - `agent/tests/test_lucy_responses_loop.py`
+    - Mock client can now raise queued exceptions.
+    - Added coverage for stale conversation retry and notice-miss follow-up
+      state injection.
+- Deployment:
+  - Built and deployed EUS2 member-facing image
+    `agentlucyacreus2.azurecr.io/agent-lucy-eus2:codex-stale-conversation-20260429160031`
+    (`sha256:ddd377df90c2c199d18bde48c043daf200e0c75cbd0f89141a7915cebf2333fb`)
+    to ACA revision `agent-lucy-eus2--0000068`.
+  - Built and activated NCUS Hosted image
+    `agentlucyacrncus.azurecr.io/agent-lucy-hosted:hosted-20260429160031-stale-conversation`
+    (`sha256:682296ce152dab8ce5358130a014c8101b67ca269733d98441a8d3163d82ead8`)
+    as `agent-lucy-hosted-ncus:10`.
+- Live verification:
+  - `agent-lucy-eus2--0000068` is running and healthy with 100% traffic.
+  - Public EUS2 root returned HTTP 200 after deployment.
+  - ACA startup logs show Foundry v2 agent load and
+    `Lucy HTTP wrapper ready`.
+  - Hosted v10 SDK smoke completed with response id
+    `caresp_e0b7cb9514354a5f00oaD8HhOQAx68Z8fjDYODSwXeqBbUqaJf` and output
+    `Lucy hosted v10 is ready.`
+  - Log Analytics workspace `4f6a12ab-ccc6-4079-a953-0a9a479eea81` shows
+    `AppRequests` row `invoke_agent agent-lucy-hosted-ncus:10` at
+    `2026-04-29T23:04:19.747676Z` with `Success=True`,
+    `gen_ai.agent.id=agent-lucy-hosted-ncus:10`, and
+    `gen_ai.agent.version=10`.
+  - Matching `AppDependencies` rows show successful `create_agent`,
+    `execute_tool`, and `chat gpt-5.2-2025-12-11` dependencies for the same
+    v10 operation.
+- Portal/control-plane interpretation:
+  - NCUS project currently has two expected active agents:
+    `agent-lucy-hosted-ncus:10` (hosted container wrapper) and
+    `agent-lucy-prod:2` (inner prompt agent used by the hosted runtime).
+  - EUS2 still has legacy prompt/custom-gateway assets including
+    `agent-lucy-prod:8`, `ApexAgentLucy:2`, and `lucy-chat-v2:5`.
+  - SUPERSEDED 2026-05-04: APIM `apexclassaction-ai-gw` and gateway ACA
+    `agent-lucy-gateway-eus2` were later retired and deleted.
+- Tests run before deployment:
+  - `python -m pytest agent/tests/test_lucy_responses_loop.py agent/tests/test_lucy_runtime.py agent/tests/test_hosted_agent_adapter.py -q`
+    returned `44 passed`.
+  - `python -m py_compile agent/app/lucy_core/responses_loop.py agent/hosted_agent/app.py`
+    passed.
+  - `git diff --check` passed.
+- Post-handoff verification after updating `TASKS.md`, hosted README, and the
+  fallback KQL runbook:
+  - Re-ran
+    `python -m pytest agent/tests/test_lucy_responses_loop.py agent/tests/test_lucy_runtime.py agent/tests/test_hosted_agent_adapter.py -q`;
+    result: `44 passed`.
+  - Re-ran
+    `python -m py_compile agent/app/lucy_core/responses_loop.py agent/hosted_agent/app.py`;
+    result: passed.
+  - Re-ran `git diff --check`; result: passed.
+- Follow-ups:
+  - Re-run a real authenticated notice/case canary through Chainlit or Hosted
+    before declaring member workflow parity.
+  - Built-in preview dashboard may still lag or show incomplete status; use raw
+    App Insights KQL and Agent metrics as the evidence path.
+  - Hosted version definitions currently include copied runtime environment
+    settings. Move secret-bearing settings to managed identity, Key Vault, or a
+    supported secret-backed Hosted control-plane pattern, then rotate affected
+    secrets.
+
+**PR review P1 remediation 2026-05-03 — IMPLEMENTED LOCALLY:**
+- Triggering evidence:
+  - PR #5 Codex review flagged Hosted metadata auth parsing: string values such
+    as `"false"` were truthy and could incorrectly mark a Hosted session
+    authenticated.
+  - PR #5 Codex review flagged Hosted deploy env propagation: the deploy
+    whitelist forwarded `AZURE_SEARCH_INDEX` but not the Foundry runtime keys
+    consumed by `foundry_init.py`.
+  - PR #2 CodeRabbit review flagged FastAPI wrapper startup masking: the
+    background `/agent/respond` wrapper could fail while Chainlit kept the
+    container alive.
+- Files changed:
+  - `agent/hosted_agent/app.py`
+  - `agent/hosted_agent/deploy_hosted_agent.py`
+  - `agent/app/start_services.sh`
+  - `agent/tests/test_hosted_agent_adapter.py`
+  - `agent/tests/test_hosted_deploy_env.py`
+- Summary:
+  - Added strict Hosted metadata boolean parsing for `authenticated` and
+    `pending_notice_request`; only explicit true-like values authenticate.
+  - Added Hosted deploy propagation for
+    `AI_SEARCH_PROJECT_CONNECTION_ID`, `AI_SEARCH_PROJECT_CONNECTION_NAME`,
+    `AI_SEARCH_INDEX_NAME`, and `AZURE_SEARCH_INDEX_NAME`.
+  - Added a compatibility mapping from legacy `AZURE_SEARCH_INDEX` to
+    `AI_SEARCH_INDEX_NAME` when no consumed index env is already present.
+  - Replaced the FastAPI wrapper process-only startup check with a bounded
+    `/agent/health` probe loop before Chainlit starts or the HTTP-only mode
+    waits in the foreground.
+- Research evidence:
+  - Microsoft Foundry Hosted Agent docs confirm hosted agent versions are
+    immutable snapshots of container image, resources, environment variables,
+    and protocol configuration, so deploy-time env propagation is part of the
+    runtime contract.
+  - Microsoft Azure AI Search tool docs confirm Foundry agents require both a
+    project connection (`project_connection_id`) and an exact search
+    `index_name`; this matches the repo's `foundry_init.py` required envs.
+- Tests run:
+  - `PYTHONPATH=agent/app:agent python -m pytest -q agent/tests/test_hosted_agent_adapter.py agent/tests/test_hosted_deploy_env.py`
+    returned `10 passed`.
+  - `PYTHONPATH=agent/app:agent python -m pytest -q agent/tests/test_lucy_responses_loop.py agent/tests/test_lucy_runtime.py agent/tests/test_hosted_agent_adapter.py agent/tests/test_hosted_deploy_env.py agent/tests/test_http_app.py`
+    returned `50 passed, 1 skipped`.
+  - `bash -n agent/app/start_services.sh` passed.
+  - `python -m py_compile agent/hosted_agent/app.py agent/hosted_agent/deploy_hosted_agent.py`
+    passed.
+  - `git diff --check` passed.
+- Blockers / follow-ups:
+  - PR #2 remains a separate open branch (`Naitiveai`); its startup P1 is
+    covered by this branch's current startup script, but the older PR should be
+    closed or updated separately if it remains an active merge candidate.
+
+**Hosted Agent gpt-5.2-chat alignment and v13 telemetry recheck 2026-05-04 — LIVE VERIFIED / DOCS REFRESHED:**
+- Status: deployed and verified for Hosted v13 chat-model routing and raw
+  telemetry. The built-in Foundry/App Insights Operate dashboard is still not
+  visually proven populated from this session.
+- Summary:
+  - Local handoff docs still pointed at `agent-lucy-hosted-ncus:10`,
+    `agent-lucy-prod:2`, and base `gpt-5.2`.
+  - Remote branch evidence and live KQL confirm the current canary is
+    `agent-lucy-hosted-ncus:13`, with inner prompt agent `agent-lucy-prod:6`
+    and model dependency rows for `chat gpt-5.2-chat-2025-12-11`.
+  - Refreshed the operator-facing handoff docs so the next agent tests v13,
+    not stale v10/base-model evidence.
+- Files changed:
+  - `TASKS.md`
+  - `agent/hosted_agent/README.md`
+  - `docs/operations/hosted-agent-observability-fallback.md`
+  - `state/refactor-ledger.md`
+- Research evidence:
+  - Microsoft Hosted Agents docs confirm Hosted Agents are custom code packaged
+    as container images, expose Responses/Invocations protocol libraries, and
+    create immutable versions from image, resources, environment variables, and
+    protocol configuration:
+    https://learn.microsoft.com/en-us/azure/foundry/agents/concepts/hosted-agents
+  - Microsoft Agent Monitoring Dashboard docs confirm the dashboard reads from
+    the Application Insights resource connected to the Foundry project, requires
+    App Insights / Log Analytics RBAC for views, and empty charts can be caused
+    by no recent traffic, time-range mismatch, or ingestion delay:
+    https://learn.microsoft.com/en-us/azure/foundry/observability/how-to/how-to-monitor-agents-dashboard
+  - Microsoft tracing setup docs confirm tracing requires an Application
+    Insights connection, recent agent traffic, and a short refresh/ingestion
+    delay before portal traces appear:
+    https://learn.microsoft.com/en-us/azure/foundry/observability/how-to/trace-agent-setup
+  - Microsoft migration docs for the refreshed hosted-agent preview confirm
+    custom/BYO agents should use protocol libraries such as
+    `azure-ai-agentserver-responses` / `ResponsesAgentServerHost`, update the
+    protocol-version format, use `project.get_openai_client(agent_name=...)`,
+    grant downstream access to the dedicated agent identity, and verify the
+    version reaches active before traffic:
+    https://learn.microsoft.com/en-us/azure/foundry/agents/how-to/migrate-hosted-agent-preview
+- Tests and live verification:
+  - Ran four Hosted v13 response smokes against
+    `agent-lucy-hosted-ncus` on 2026-05-04:
+    `caresp_7134d54ea580a75b00J20xvnHP4CrbtzYg0Zu5TMRkZ7E7oBme`,
+    `caresp_bbbb275a5dab095100H5dl4xnkju92aLL3OoJ89lQk4SGnXwDv`,
+    `caresp_a4b147e884c3bcae00OwqgMr93x8l9ujy1Ze0PPSlBv3EBZ5ZI`, and
+    `caresp_ae9411e47bbc3cd300RSCBUwg3aZWeT4hcwKuV9YZ8wWr42B3n`.
+  - All returned `status=completed`, `error=None`, agent reference
+    `agent-lucy-hosted-ncus` version `13`, and output
+    `Lucy hosted v13 telemetry is alive.`
+  - Log Analytics workspace `4f6a12ab-ccc6-4079-a953-0a9a479eea81`
+    showed fresh 30-minute rows through `2026-05-04T08:26:10Z`:
+    `AppRequests` for `invoke_agent agent-lucy-hosted-ncus:13` with
+    `row_count=7`, `success=True`, `gen_ai.agent.id=agent-lucy-hosted-ncus:13`,
+    and `gen_ai.agent.version=13`.
+  - Matching `AppDependencies` rows showed `create_agent` for
+    `agent-lucy-hosted-ncus:13`, `invoke_agent agent-lucy-prod:6`, and
+    `chat gpt-5.2-chat-2025-12-11`, all with `success=True`.
+  - `AppMetrics` showed fresh `_APPRESOURCEPREVIEW_` metric rows for both
+    `service.name=responsesapi` and `service.name=agent-lucy-hosted-ncus`.
+- Blockers / follow-ups:
+  - Foundry Operate dashboard remains a visual/portal proof gap. Raw request,
+    dependency, and metric telemetry are healthy, but this session did not have
+    browser-confirmed dashboard population.
+  - The old continuous response-eval rule still needs a clean post-v20 run; the
+    one-off v13 Hosted target eval from 2026-05-03 passed.
+  - Full notice-auth-PDF-HITL canary remains pending after the observability
+    path is acceptable.
+
+**AI Gateway/APIM bridge retirement 2026-05-04 — LIVE DELETED / DOCS REFRESHED:**
+- Status: completed for the abandoned East US2 gateway bridge. The Hosted Agent
+  route remains the selected path; the member-facing Chainlit ACA was preserved.
+- Summary:
+  - User clarified that the AI Gateway path had been abandoned after earlier
+    APIM method-rewrite work and authorized cleanup.
+  - Pre-delete Azure state showed APIM `apexclassaction-ai-gw` in resource group
+    `agent-lucy-eus2` with APIs `agent-lucy-foundry-eus2`, `lucy-bo2zjet3`,
+    and `lucyv2-eojkdlgt`; `lucyv2-eojkdlgt` forwarded to
+    `https://agent-lucy-gateway-eus2.purpleocean-f3514433.eastus2.azurecontainerapps.io/agent/respond`.
+  - Pre-delete Azure state showed gateway-only ACA `agent-lucy-gateway-eus2`
+    running revision `agent-lucy-gateway-eus2--0000014` with one replica.
+  - Seven-day Log Analytics showed no recent `lucy-aca` gateway traffic after
+    2026-04-29, while current Hosted traffic was landing through
+    `agent-lucy-hosted-ncus:20`.
+  - Deleted APIM `apexclassaction-ai-gw`.
+  - Deleted gateway-only ACA `agent-lucy-gateway-eus2`.
+  - Verified both resources now return `ResourceNotFound`.
+  - Verified subscription gateway scan only returns unrelated NAT gateway
+    `Apex_NATGW`.
+  - Verified member-facing ACA `agent-lucy-eus2` remains running as revision
+    `agent-lucy-eus2--0000069`.
+- Files changed:
+  - `TASKS.md`
+  - `agent/hosted_agent/README.md`
+  - `docs/architecture/foundry-ai-gateway-registration.md`
+  - `state/refactor-ledger.md`
+- Tests / live verification:
+  - `az resource show` for APIM `apexclassaction-ai-gw` -> `ResourceNotFound`.
+  - `az resource show` for ACA `agent-lucy-gateway-eus2` -> `ResourceNotFound`.
+  - `az resource list` gateway/APIM scan -> only unrelated `Apex_NATGW`.
+  - `az containerapp show --name agent-lucy-eus2 --resource-group agent-lucy-eus2`
+    -> `runningStatus=Running`, latest revision `agent-lucy-eus2--0000069`.
+- Blockers / follow-ups:
+  - EUS2 Foundry still has legacy prompt/application lineages such as
+    `agent-lucy-prod`, `lucy-chat-v2`, `lucy-chat`, and `lucy`. Those were not
+    deleted in this pass because the explicit gateway bridge cleanup was APIM +
+    gateway ACA, and EUS2 member/runtime history may still be useful until
+    Chainlit cutover is decided.
+  - Built-in Operate dashboard still needs separate closure; raw App Insights
+    confirmed current Hosted v20 telemetry, but the dashboard remains visually
+    unreliable.
+
+**Operate dashboard fallback workbook refresh 2026-05-04 — LIVE VERIFIED:**
+- Status: completed for the portal-visible KQL fallback. The built-in Foundry
+  Operate overview remains blank/unreliable, but the Azure Monitor workbook now
+  exposes the same production telemetry evidence in portal form.
+- Summary:
+  - Rechecked the logged-in Foundry Operate overview after gateway deletion; it
+    still showed no data for estimated cost, agent success rate, token usage,
+    agent run volume, and top increase/decrease panels.
+  - Refreshed shared Azure Monitor workbook `Lucy Hosted COO Monitor`:
+    `/subscriptions/22f9f915-587f-4a9a-acff-69b061ef48e1/resourceGroups/agent-lucy-eus2/providers/Microsoft.Insights/workbooks/d93d5898-c385-40ff-978e-eea3dbf03332`.
+  - Workbook source is Application Insights `agent-lucy-appins-eus2`:
+    `/subscriptions/22f9f915-587f-4a9a-acff-69b061ef48e1/resourceGroups/agent-lucy-eus2/providers/Microsoft.Insights/components/agent-lucy-appins-eus2`.
+  - Updated workbook content to current Hosted v20, inner prompt
+    `agent-lucy-prod:6`, model lane `gpt-5.2-chat`, and retired-gateway state.
+  - Removed stale v14/v15 wording and incorrect count/token division from the
+    workbook queries.
+- Research evidence:
+  - Microsoft Agent Monitoring Dashboard docs confirm the dashboard is preview,
+    reads from the project's connected Application Insights resource, requires
+    App Insights / Log Analytics RBAC, and can show empty charts when traffic,
+    time range, or ingestion conditions do not line up:
+    https://learn.microsoft.com/en-us/azure/foundry/observability/how-to/how-to-monitor-agents-dashboard
+  - Microsoft Application Insights Agent details docs confirm Azure Monitor can
+    provide the agent monitoring surface from OpenTelemetry GenAI semantics,
+    which is the basis for the `Lucy Hosted COO Monitor` workbook fallback:
+    https://learn.microsoft.com/en-us/azure/azure-monitor/app/agents-view
+- Files changed:
+  - `TASKS.md`
+  - `docs/operations/hosted-agent-observability-fallback.md`
+  - `state/refactor-ledger.md`
+- Tests / live verification:
+  - Application Insights workbook invocation query returned
+    `agent-lucy-hosted-ncus:20`, `Runs=20`, `Success=20`, `Failures=0`,
+    `SuccessRate=1`, latest response
+    `caresp_8d573622b8c4439000NJ0TQ3JeQlRW0XoUU1PqRZvd1o2cHcxi`.
+  - Resume recheck on 2026-05-04 returned current Hosted v20 health through
+    both telemetry paths: App Insights `requests` 7-day window
+    `Runs=18`, `Successes=18`, `Failures=0`, latest
+    `2026-05-04T11:05:25.568265Z`; Log Analytics `AppRequests` 24-hour window
+    `Runs=10`, `Successes=10`, `Failures=0`.
+  - Confirmed the real Log Analytics workspace resource is
+    `agent-lucy-law-eus2`; the workbook source remains Application Insights
+    `agent-lucy-appins-eus2`.
+  - Dependency/token query returned Hosted v20 rows for `create_agent` and
+    `chat` with `TotalTokens=95940`, `InputTokens=94486`,
+    `OutputTokens=1454`, plus inner rows for `agent-lucy-prod:6` and
+    `chat gpt-5.2-chat-2025-12-11`.
+  - Metric inventory query returned `Item_Success_Count`, plus fresh
+    `_APPRESOURCEPREVIEW_` rows for `agent-lucy-hosted-ncus` and `responsesapi`.
+- Blockers / follow-ups:
+  - This closes the COO-safe portal fallback, not the native Foundry Operate
+    preview dashboard. Treat the native dashboard as a Microsoft preview/portal
+    issue until it visibly populates or Microsoft confirms the required source
+    contract.
+
+**May 6 Hosted v21 portal telemetry recheck — LIVE VERIFIED / NATIVE UI STILL WEAK:**
+- Status: completed for fresh telemetry and Azure Monitor workbook evidence;
+  blocked for native Foundry Operate visual proof because the resumed terminal can
+  control Chrome tabs but cannot capture or inspect the page contents.
+- Summary:
+  - Removed committed merge-conflict markers from the active handoff docs before
+    continuing the audit. The resolved current state is Hosted-first, with the
+    old AI Gateway/APIM path retired and deleted.
+  - Removed the one real unresolved merge-conflict block in
+    `agent/app/lucy_core/responses_loop.py`. The resolved code preserves both
+    required behaviors: the GenAI response telemetry/metric helpers and the
+    stale `conversation_not_found` recovery helper.
+  - Ran three fresh Hosted REST smokes against
+    `agent-lucy-hosted-ncus`; all completed successfully and retrieved assistant
+    output text:
+    `caresp_65a1ddd2d4dcc73700KUIfwqFoHdZZJLFBxGfSc8HTMpmdNo1s`,
+    `caresp_b41756284523295400kHMouXPVPnbF9ek9IBxWU37rbrScSIkE`, and
+    `caresp_c0208595c364d6f400q3jDeh60dxrZ3GxpX6B9kyzEP8AjuyAp`.
+  - Fresh telemetry shows the current Hosted runtime is
+    `agent-lucy-hosted-ncus:21`, not the previously documented v20, and the inner
+    prompt agent now emits as `agent-lucy-prod:8`, not v6.
+  - Updated shared Azure Monitor workbook `Lucy Hosted COO Monitor` to current
+    v21/v8 wording and query matching. The new workbook revision is
+    `f6657d50222844a08c9a97030c016597`.
+  - Chrome control check found an existing logged-in Microsoft Foundry tab at
+    `https://ai.azure.com/nextgen/r/Ivn5FVh_Spqs_2mwYe9I4Q,agent-lucy-ncus,,agent-lucy-foundry-ncus,agent-lucy-prj-ncus/operate/overview`.
+    `chrome-cli info` confirmed title `Microsoft Foundry`, URL at the Operate
+    overview, and `Loading: No`.
+  - Opened the Azure Portal workbook URL in the same Chrome window; `chrome-cli
+    info` confirmed title
+    `d93d5898-c385-40ff-978e-eea3dbf03332 (Lucy Hosted COO Monitor) - Microsoft Azure`,
+    URL at the workbook resource, and `Loading: No`.
+  - Browser content inspection is still limited:
+    Screenshot capture failed with `could not create image from display`,
+    JavaScript inspection is disabled in Chrome's Apple Events settings, and
+    macOS accessibility inspection is not allowed for `osascript`.
+- Files changed:
+  - `TASKS.md`
+  - `agent/hosted_agent/README.md`
+  - `agent/app/lucy_core/responses_loop.py`
+  - `state/foundry-native-metrics-diagnostic.md`
+  - `docs/operations/hosted-agent-observability-fallback.md`
+  - `state/refactor-ledger.md`
+- Research evidence:
+  - Microsoft supported metrics docs for
+    `Microsoft.CognitiveServices/accounts/projects` list
+    `AgentResponses`, `AgentInputTokens`, `AgentOutputTokens`, `AgentRuns`, and
+    `AgentToolCalls` as project resource metrics with dimensions such as
+    `AgentId`, `ModelName`, `ResponseStatus`, `RunStatus`, `StatusCode`,
+    `ThreadId`, `StreamType`, and `ToolName`. These metrics are Azure Monitor
+    resource metrics, not Application Insights custom metric names:
+    https://learn.microsoft.com/en-us/azure/azure-monitor/reference/supported-metrics/microsoft-cognitiveservices-accounts-projects-metrics
+  - Microsoft Agent Monitoring Dashboard docs confirm the dashboard is a preview
+    surface that reads telemetry from the project's connected Application
+    Insights resource, while troubleshooting empty charts recommends checking
+    traffic, time range, and ingestion delay:
+    https://learn.microsoft.com/en-us/azure/foundry/observability/how-to/how-to-monitor-agents-dashboard
+- Tests / live verification:
+  - REST retrieval for the three `caresp_...` ids returned `status=completed`,
+    `error=null`, agent reference `agent-lucy-hosted-ncus` version `21`, and
+    output text `Lucy May 6 portal telemetry smoke N is alive.`
+  - App Insights `requests` 24-hour query returned
+    `invoke_agent agent-lucy-hosted-ncus:21`, `Runs=6`, `Successes=6`,
+    `Failures=0`, latest response
+    `caresp_c0208595c364d6f400q3jDeh60dxrZ3GxpX6B9kyzEP8AjuyAp`.
+  - App Insights `dependencies` 24-hour query returned current rows for
+    `create_agent` and hosted `chat` with `agent-lucy-hosted-ncus:21`,
+    `TotalTokens=28698`, `InputTokens=28128`, `OutputTokens=570`; inner rows
+    returned `invoke_agent agent-lucy-prod:8` and
+    `chat gpt-5.2-chat-2025-12-11`.
+  - App Insights `customMetrics` 2-hour query returned
+    `gen_ai.client.token.usage`, `gen_ai.client.operation.duration`, and fresh
+    `_APPRESOURCEPREVIEW_` rows for `responsesapi` and
+    `agent-lucy-hosted-ncus`.
+  - Azure Monitor project metric definitions still expose the native dashboard
+    metric names (`AgentResponses`, `AgentInputTokens`, `AgentOutputTokens`,
+    `AgentRuns`, `AgentToolCalls`), but a direct metric query for the fresh
+    2026-05-06 12:45-13:05 UTC smoke window returned all-zero timeseries for
+    those five metrics while App Insights showed the v21 request/dependency
+    rows. This keeps the native Build/Operate metric path unresolved.
+  - Foundry account-level model metrics for the same
+    2026-05-06 12:45-13:05 UTC smoke window were non-zero:
+    `ModelRequests=3`, `InputTokens=14064`, `OutputTokens=285`, and
+    `TotalTokens=14349`. Project-level `AgentEvents`, `AgentMessages`,
+    `AgentThreads`, and `AgentUsageIndexedFiles` were also zero. This confirms
+    model/runtime execution is visible to the Foundry account metric namespace,
+    while the project Agent metric namespace is not binding the Hosted v21 runs.
+  - Investigated whether the missing project Agent metrics were caused by using
+    the direct Hosted endpoint instead of a published Agent Application. Live
+    ARM state showed only `agent-lucy-prod` existed as an application, with a
+    `Managed` deployment to prompt agent v8. A temporary application
+    `agent-lucy-hosted-ncus` was created with a `Hosted` deployment to
+    `agent-lucy-hosted-ncus:21`; it provisioned successfully and reached
+    `state=Running`, but the application-scoped Responses endpoint rejected
+    invocation with `Application-scoped routes only support prompt agents. Agent
+    kind 'hosted' is not supported.` The temporary Hosted application and
+    deployment were stopped/deleted, and verification returned
+    `ApplicationNotFound` / `DeploymentNotFound` for both tested ARM API
+    versions. This rules out Agent Application publication as a current
+    supported fix for Hosted native metrics.
+  - Post-cleanup direct Hosted route smoke returned
+    `caresp_06c3f16130375552006V62t3ttCGXKVpxxbaFvtay0pimmyI2H`,
+    `status=completed`, `error=null`, agent reference
+    `agent-lucy-hosted-ncus:21`, and output text
+    `Direct hosted route remains alive.`
+  - Ran a prompt-agent Application route control against
+    `agent-lucy-prod/protocols/openai/responses`; response
+    `resp_06a8c313860b3cee0169fb427a97808194a2b7305137ed0c07` completed on
+    `agent-lucy-prod:8` with output text `Prompt application route is alive.`
+    For the actual 2026-05-06 13:20-13:40 UTC window, Foundry account-level
+    model metrics moved (`ModelRequests=2`, `InputTokens=9366`,
+    `OutputTokens=129`, `TotalTokens=9495`), but project-level
+    `AgentResponses`, `AgentInputTokens`, `AgentOutputTokens`, `AgentRuns`,
+    `AgentToolCalls`, and project-level model token metrics all remained zero.
+    This means the native project metric rollup is not just missing direct
+    Hosted endpoint traffic; it also failed to bind a supported prompt-agent
+    Application invocation in the same project.
+  - Added `state/foundry-native-metrics-diagnostic.md` as a tracked, repeatable
+    evidence artifact with the exact KQL and Azure Monitor metric commands for
+    the App Insights-positive / project-Agent-metrics-zero split.
+  - Final App Insights dimension sanity check showed v21 `create_agent` and
+    `chat` dependency rows carry
+    `microsoft.foundry.project.id=/subscriptions/22f9f915-587f-4a9a-acff-69b061ef48e1/resourceGroups/agent-lucy-ncus/providers/Microsoft.CognitiveServices/accounts/agent-lucy-foundry-ncus/projects/agent-lucy-prj-ncus`,
+    `gen_ai.agent.id=agent-lucy-hosted-ncus:21`,
+    `gen_ai.agent.name=agent-lucy-hosted-ncus`,
+    `gen_ai.agent.version=21`, `gen_ai.provider.name=azure.ai.foundry`, and
+    `gen_ai.system=azure.ai.foundry`.
+  - Final App Insights custom metric sanity check showed
+    `gen_ai.client.token.usage` and `gen_ai.client.operation.duration` carry the
+    same project id, hosted agent name/version, provider, operation, model, and
+    token type dimensions.
+  - Workbook revision read confirmed `agent-lucy-hosted-ncus:21`,
+    `agent-lucy-prod:8`, `gpt-5.2-chat`, and generalized
+    `agent_id startswith 'agent-lucy-prod'`; no v20/v6 workbook target remains.
+  - Local conflict-marker audit found only separator comments in
+    `portal/app/static/js/portal.js`; no unresolved merge-conflict markers
+    remain in the active Python/Markdown handoff surfaces.
+  - `PYTHONPATH=agent/app:agent python -m py_compile
+    agent/app/lucy_core/responses_loop.py` passed.
+  - `PYTHONPATH=agent/app:agent python -m pytest -q
+    agent/tests/test_lucy_responses_loop.py agent/tests/test_lucy_runtime.py
+    agent/tests/test_hosted_agent_adapter.py` returned `53 passed`.
+  - `git diff --check` passed after the documentation updates.
+- Blockers / follow-ups:
+  - Native Foundry Operate remains unclosed as a visual proof requirement. The
+    logged-in Chrome tab is present at the Operate URL, but the resumed terminal
+    lacks screenshot/DOM/accessibility access to prove whether the native cards
+    populated or still show no data.
+  - Hosted Agent Application publication is not a valid current workaround for
+    native Operate metrics: the live application-scoped Responses route rejects
+    Hosted agent kind even though ARM accepts the deployment shape.
+  - Prompt-agent Application traffic also failed to populate project Agent
+    metrics while account-level model metrics moved, so the remaining native
+    Operate/project metric gap is a project/control-plane rollup blocker rather
+    than an obvious Lucy application-code patch.
+  - The production-safe portal evidence path is currently the Azure Monitor
+    workbook and App Insights KQL, not the native Foundry Operate overview.
 
 **COA reason writeback slice 2026-04-29 — IMPLEMENTED WITH LIVE SCHEMA CONFIRMATION:**
 - Triggering instruction: user requested the Lucy COA-reason writeback in the
   address-update path. The expected `/plans/004-coa-audit-writeback.md` file is
-  not present in this repo, so the explicit user instruction drove this bounded
-  slice.
+  not present in this repo. The old `.agents/skills/lucy-spec-implementation/SKILL.md`
+  reference has since been resolved as a stale scaffold, so the explicit user
+  instruction drove this bounded slice.
 - Files changed:
   - `agent/app/user_functions.py`
   - `portal/app/user_functions.py`
@@ -1090,9 +1669,625 @@ Follow-up:
 
 ---
 
+## Foundry native metric rollup RBAC closure 2026-05-06
+
+- Status: investigated and still blocked on the native project metric rollup.
+  No runtime code change and no Azure RBAC mutation were made.
+- Summary:
+  - Confirmed the logged-in Chrome session has the Microsoft Foundry Operate tab
+    open at
+    `https://ai.azure.com/nextgen/r/Ivn5FVh_Spqs_2mwYe9I4Q,agent-lucy-ncus,,agent-lucy-foundry-ncus,agent-lucy-prj-ncus/operate/overview`
+    and the `Lucy Hosted COO Monitor` workbook tab open in Azure Portal.
+  - Re-ran the post-gateway-retirement Hosted smoke and prompt-application
+    control in the 2026-05-06 13:41-13:42 UTC window.
+  - Direct Hosted route returned
+    `caresp_ff39db10110eda0000IEoPzSeV3jwlQdOTX1qc6lE0d76uQGGw`,
+    `status=completed`, `error=null`.
+  - Prompt-agent Application route returned
+    `resp_02daf5317b79b4350169fb452942c081909de28df403ce1840`,
+    `status=completed`, `error=null`, agent reference `agent-lucy-prod:8`.
+  - App Insights ingested request rows for
+    `invoke_agent agent-lucy-hosted-ncus:21`, Hosted `create_agent` / `chat`
+    dependency rows with `gen_ai.agent.id=agent-lucy-hosted-ncus:21`, and
+    prompt-agent `invoke_agent agent-lucy-prod:8` plus model `chat
+    gpt-5.2-chat-2025-12-11` rows.
+  - Foundry account metrics for 2026-05-06 13:35-13:50 UTC moved:
+    `ModelRequests=1`, `InputTokens=4680`, `OutputTokens=96`,
+    `TotalTokens=4776`.
+  - Foundry project metrics for the same window remained zero for
+    `AgentResponses`, `AgentInputTokens`, `AgentOutputTokens`, `AgentRuns`,
+    `AgentToolCalls`, project-level `InputTokens`, project-level
+    `OutputTokens`, and project-level `TotalTokens`.
+- RBAC / connection evidence:
+  - Foundry project App Insights connection
+    `agentlucyappinseus2dq5t8e` is default, targets
+    `agent-lucy-appins-eus2`, and has `error=null`.
+  - Azure CLI user `Chris@apexclassaction.com` has inherited subscription
+    roles including `Owner`, `Contributor`, `Monitoring Contributor`, `Log
+    Analytics Contributor`, `Azure AI Administrator`, and `Azure AI User`.
+  - Project managed identity `d4f3d82d-0056-4e6f-93f8-d1be9b049d94` has
+    `Log Analytics Reader` on `agent-lucy-appins-eus2` and both `Log Analytics
+    Reader` / `Log Analytics Data Reader` on the managed App Insights
+    workspace.
+  - Hosted runtime identity `bf64d26c-34a5-4bc8-a1b2-b22e9ff24b67` has `Azure
+    AI User` and `Azure AI Project Manager` on the NCUS Foundry project.
+- Research evidence:
+  - Microsoft Foundry Agent Monitoring Dashboard docs, updated 2026-04-30:
+    dashboard telemetry is read from the Application Insights resource connected
+    to the Foundry project; log-based views require access to the associated Log
+    Analytics workspace; empty charts can also mean no recent traffic, excluded
+    time range, or ingestion delay.
+  - Microsoft Foundry tracing docs, updated 2026-04-16: prompt-agent tracing is
+    generally available, while workflow, hosted, and custom-agent tracing are
+    preview; traces are stored in the connected Application Insights resource.
+  - Azure Monitor supported project metrics docs list the project Agent metric
+    names queried here (`AgentResponses`, `AgentInputTokens`,
+    `AgentOutputTokens`, `AgentRuns`, `AgentToolCalls`) as preview metrics on
+    `Microsoft.CognitiveServices/accounts/projects`.
+- Tests and live verification:
+  - Direct Hosted REST smoke completed.
+  - Prompt-agent Application REST control completed.
+  - App Insights KQL returned current Hosted and prompt-agent trace rows.
+  - Azure Monitor account metrics returned non-zero model totals.
+  - Azure Monitor project metrics returned zero Agent and token totals.
+  - `chrome-cli list tabs` confirmed logged-in Foundry and COO workbook tabs.
+  - `chrome-cli activate -t 162556238 --focus` confirmed the Foundry Operate
+    tab can be focused and remains loaded at the Operate overview URL.
+  - Process ownership check showed commands are launched by
+    `/Applications/Codex.app/Contents/Resources/codex app-server`; the app
+    bundle identifier is `com.openai.codex`.
+  - `CGPreflightScreenCaptureAccess()` returned `False`.
+  - `CGRequestScreenCaptureAccess()` returned `False`.
+  - `screencapture -x /tmp/lucy-foundry-operate-resume.png` still failed with
+    `could not create image from display`.
+  - Window-targeted `screencapture -x -l <chrome-window-id>` still failed with
+    `could not create image from window`.
+  - Chrome AppleScript JavaScript execution still failed because `Allow
+    JavaScript from Apple Events` is disabled.
+  - macOS Accessibility inspection still failed with `osascript is not allowed
+    assistive access`.
+  - `AXIsProcessTrustedWithOptions(prompt: true)` returned `false`.
+  - `lsof` showed no Chrome DevTools listening port available for attachment.
+  - Quartz `CGWindowListCreateImage` returned no image for the Chrome window.
+  - Opened System Settings panes for Screen Recording and Accessibility via
+    `x-apple.systempreferences` URLs so `Codex.app` can be granted local visual
+    inspection permissions if native Operate proof remains required.
+  - Rechecked at 2026-05-06T13:56:09Z: screen capture preflight still returned
+    `False`, Accessibility trusted check still returned `false`, and
+    `chrome-cli info -t 162556238` still showed the Microsoft Foundry Operate
+    tab loaded at the expected project URL.
+  - Browser plugin/tool discovery exposed managed browser-session tools rather
+    than an attachment to the already logged-in local Chrome tab, so that route
+    cannot satisfy the `logged-in Chrome browser` proof requirement.
+  - Relaunched Chrome Profile 1 with `--remote-debugging-port=9222` and the
+    Foundry Operate URL. The process args contained the flag, but
+    `127.0.0.1:9222` did not bind. Chrome's official 2025 remote-debugging
+    hardening docs explain why: Chrome 136+ no longer respects
+    `--remote-debugging-port` / `--remote-debugging-pipe` for the default Chrome
+    data directory; a non-standard `--user-data-dir` would lose the logged-in
+    Foundry session and therefore does not satisfy this goal.
+  - Tested a reversible Chrome JavaScript Apple Events preference path:
+    backed up Profile 1 preferences, attempted
+    `browser.allow_javascript_apple_events=true`, restarted Chrome, and reopened
+    the Operate URL. Chrome overwrote the profile JSON value on restart. A
+    separate `defaults write com.google.Chrome browser.allow_javascript_apple_events
+    -bool true` attempt also failed; direct AppleScript still reported
+    JavaScript from Apple Events disabled. The defaults value was removed after
+    the failed attempt.
+- Results:
+  - The retired EUS2 gateway is not masking the issue.
+  - The direct Hosted route is not the only explanation; a supported
+    prompt-agent Application call also failed to move project Agent metrics.
+  - The documented App Insights connection and reader-access prerequisites are
+    satisfied for the project/dashboard reader path.
+  - Added `state/foundry-native-metrics-support-brief.md` as a compact
+    Microsoft escalation / handoff artifact with resources, response ids,
+    metric windows, RBAC checks, browser limitations, and the current ask.
+  - Added `state/foundry-operate-completion-audit.md` to map the active goal to
+    concrete evidence and record why the completion gate is still not met.
+- Blockers:
+  - Native Foundry project Agent metric rollup remains zero despite healthy
+    execution, healthy App Insights traces, and non-zero account model metrics.
+  - Programmatic visual inspection of the logged-in browser remains limited:
+    the in-app browser backend is unavailable, Chrome AppleScript JavaScript is
+    disabled, and screenshot capture was blocked earlier by macOS display
+    permissions.
+- Follow-ups:
+  - Use the `Lucy Hosted COO Monitor` workbook and raw App Insights KQL as the
+    portal evidence path for COO/demo review.
+  - Escalate the project metric rollup behavior to Microsoft with the response
+    IDs and metric windows in `state/foundry-native-metrics-support-brief.md`
+    if native Build/Operate cards remain a release gate.
+  - Do not reintroduce AI Gateway/APIM or mutate runtime code solely to chase
+    `Microsoft.CognitiveServices/accounts/projects` metrics without a documented
+    ingestion contract.
+
+---
+
+## Lucy COO Field Policy Boundary 2026-05-06
+
+- Status: completed as a bounded implementation slice. This is not a new
+  platform migration phase; it is a contract-hardening update based on the
+  COO-confirmed Dataverse form source of truth.
+- Active source of truth:
+  - Dataverse table: `new_classmember` / entity set `new_classmembers`.
+  - Main form: `Information`.
+  - Form ID: `05e90c7f-deeb-4e50-b9c0-f7bf207bb3a2`.
+  - Form tab: `Lucy Class Member Data`.
+- Summary:
+  - Added a central Lucy field manifest derived from the COO-approved form tab.
+  - Split fields by outcome so Lucy can still pivot by intent while each tool
+    carries only the fields needed for that outcome.
+  - Kept internal Dataverse IDs separate from Lucy-facing fields; IDs remain
+    available for tool joins but are not treated as business context.
+  - Replaced `get_class_member_details_sync` dynamic all-field discovery/read
+    behavior with manifest-backed `$select` clauses.
+  - Restricted `get_member_disbursements_sync` to the approved disbursement
+    subgrid fields and filtered requested custom selects against the manifest.
+  - Tightened authentication reads to the approved identity fields.
+  - Removed broad Dataverse query/update/discovery tools and reissue write tools
+    from Lucy's registered Dynamics tool list. The underlying helper functions
+    remain in code for internal callers, but they are no longer directly exposed
+    as Lucy function-call tools.
+- Files changed:
+  - `agent/app/lucy_field_policy.py` (new central manifest and helpers).
+  - `agent/app/user_functions.py` (manifest-backed reads/writes and narrower
+    Dynamics tool registration).
+  - `agent/app/agentic_authentication.py` (auth query select now uses the
+    approved identity field set).
+  - `agent/tests/test_lucy_field_policy.py` (new manifest unit tests).
+  - `agent/tests/test_coa_reason_writeback.py` (tool registration and bounded
+    read regression coverage).
+  - `graphify-out/` refreshed with `graphify update .`.
+- Research / evidence used:
+  - Live Dataverse metadata query confirmed there is no system/personal view,
+    form, dashboard, app, or chart with `Lucy` in the artifact name visible to
+    the Lucy app user.
+  - Live Dataverse `systemform` metadata confirmed the relevant artifact is the
+    `new_classmember` main form `Information`, form id
+    `05e90c7f-deeb-4e50-b9c0-f7bf207bb3a2`, with tab
+    `Lucy Class Member Data`.
+  - The same form XML yielded the exact Lucy sections and field logical names:
+    PII, employment/settlement, disbursement subgrid, and potential member
+    status.
+  - The disbursement subgrid references relationship
+    `new_new_classmember_new_memberdisbursement_ClassMember`, target entity
+    `new_memberdisbursement`, and saved view
+    `EC040B47-83C8-48D5-99F0-4BC80BEBA904` (`Active Member Disbursements`).
+- Tests run:
+  - `pytest -q agent/tests/test_lucy_field_policy.py
+    agent/tests/test_coa_reason_writeback.py` -> `14 passed`.
+  - `pytest -q agent/tests/test_lucy_tool_registry.py
+    agent/tests/test_notice_tool_instructions.py
+    agent/tests/test_lucy_responses_loop.py` -> `52 passed`.
+  - `python -m compileall -q agent/app/lucy_field_policy.py
+    agent/app/user_functions.py agent/app/agentic_authentication.py` -> passed.
+  - `python -m compileall -q agent/app/agentic_authentication_enhanced_v2.py
+    agent/app/lucy_core/tool_registry.py` -> passed.
+  - `graphify update .` -> rebuilt graph artifacts successfully.
+- Results:
+  - Lucy now has a code-level field policy matching the COO-approved form source.
+  - Class member detail reads no longer ask Dataverse for all fields.
+  - Disbursement reads no longer pass through unapproved requested fields such
+    as `new_checkreissuerequest` or `new_name`.
+  - Lucy's registered Dynamics tools no longer include broad direct
+    `query_entity_sync`, `update_entity_sync`, dynamic discovery, or reissue
+    write surfaces.
+- Blockers:
+  - None for this bounded slice.
+- Follow-ups:
+  - If the COO wants Lucy to perform check reissue mutations, add the needed
+    reissue fields to the approved Dynamics form/tab first, then reintroduce a
+    dedicated outcome tool with manifest-backed read/write policy.
+  - Consider mirroring the field manifest into portal/operator code only if the
+    portal should share Lucy's exact member-facing boundary. This slice avoided
+    changing operator surfaces.
+
+---
+
+## Foundry Operate Browser Inspection 2026-05-06
+
+- Status: blocked for native Operate as the production evidence gate, but the
+  direct logged-in browser inspection requirement is now satisfied.
+- Summary:
+  - Launched the installed CuaDriver daemon and confirmed Accessibility and
+    Screen Recording grants.
+  - Attached to Chrome pid `65519`, window id `6335`, with the logged-in
+    Microsoft Foundry Operate page loaded for `agent-lucy-prj-ncus`.
+  - Used CuaDriver `get_window_state` to capture screenshot dimensions and the
+    Accessibility tree for the actual local Chrome window.
+  - Opened the project selector, confirmed the available projects include
+    `agent-lucy-prj-eus2` and `agent-lucy-prj-ncus`, and selected
+    `agent-lucy-prj-ncus`.
+  - Confirmed the Operate overview shows one active/high compliance alert for
+    `agent-lucy-foundry-eus2`.
+  - Confirmed the Operate overview shows `Running agents` as `1/2 agents`, but
+    still shows no usable native run/cost/success/token evidence for the fresh
+    Lucy traffic.
+  - Opened the Assets table from the same logged-in session. It lists
+    `agent-lucy-hosted-ncus` as Foundry source, status `Unknown`, version `21`,
+    blank cost/token/runs, and `1/3 enabled` monitoring features; it lists the
+    inner `agent-lucy-prod` as status `Running`, version `8`, published as
+    `agent-lucy-prod`, estimated cost `$0.00`, blank token/runs, and `1/3
+    enabled` monitoring features.
+  - Opened the Hosted Agent Monitor tab for `agent-lucy-hosted-ncus`. It shows
+    `Estimated cost` as `$0` and `Total token usage` as `0` for
+    `4/6/2026 - 5/6/2026`.
+  - Opened Monitor settings. App Insights is connected to
+    `agent-lucy-appins-eus2`; continuous evaluation, scheduled evaluations, and
+    evaluation alerts are disabled. Those disabled features are evaluation
+    related and do not explain the empty operational cost/token/run cards.
+  - Rechecked live App Insights dimensions after the visual pass. The deployed
+    v21 Hosted request row has `gen_ai.agent.name=agent-lucy-hosted-ncus`,
+    `gen_ai.agent.id=agent-lucy-hosted-ncus:21`,
+    `gen_ai.agent.version=21`, and the NCUS
+    `microsoft.foundry.project.id`. Hosted `create_agent` and `chat`
+    dependency rows carry the same agent/project identity plus
+    `gen_ai.provider.name=azure.ai.foundry`, `gen_ai.system=azure.ai.foundry`,
+    `gen_ai.request.model=gpt-5.2-chat`, `gen_ai.response.model=gpt-5.2-chat`,
+    and populated input/output/total token usage. This rules out the suspected
+    deployed telemetry mismatch where `gen_ai.agent.name` might include the
+    version suffix.
+  - Opened the native Foundry `Traces` tab for `agent-lucy-hosted-ncus`. The
+    `Sessions` subtab is populated with `1-10 of 50` sessions; the latest
+    visible session is
+    `cb7a17614b2868be40d605950c8cf6a830ca100764d3b7b415f9b236bbdee71`,
+    status `Idle`, created `5/6/26, 7:01:59 AM`, and the session drawer shows
+    `agent: agent-lucy-hosted-ncus`, `session_state: Stopped`, generated at
+    `2026-05-06T14:20:30.9085254+00:00`, last accessed
+    `2026-05-06T14:01:59.764+00:00`.
+  - Ran a final direct Hosted Agent smoke after the browser path was working.
+    It returned response id
+    `caresp_52181c90d41c7cb5000Rm8Mly6EKzH9K81JVEeJ7h2gV21MIi2`,
+    `status=completed`, `error=None`, and output text
+    `Native trace proof alive.`
+  - App Insights confirmed the final smoke with a request row at
+    `2026-05-06T14:24:40.380148Z`, name
+    `invoke_agent agent-lucy-hosted-ncus:21`, success `True`, duration `7871`,
+    response id
+    `caresp_52181c90d41c7cb5000Rm8Mly6EKzH9K81JVEeJ7h2gV21MIi2`, agent id
+    `agent-lucy-hosted-ncus:21`, agent name `agent-lucy-hosted-ncus`, and
+    agent version `21`.
+  - App Insights dependency rows for the final smoke included Hosted
+    `create_agent` and Hosted `chat` rows with model `gpt-5.2-chat`, input
+    tokens `4682`, output tokens `35`, and total tokens `4717`.
+  - Refreshed the native Foundry `Traces > Sessions` tab after the final smoke.
+    The latest row is
+    `b475a2c592cdf55253b3adfb8632f61a95174cfc785656d996e892bd73e0b1f`,
+    status `Active`, created `5/6/26, 7:24:37 AM`, expires
+    `6/5/26, 7:24:37 AM`.
+  - Opened `Traces > Conversations`. It shows `1-25 of 76` visible
+    conversation rows. The latest row has trace id
+    `0980331f6722444d773ab08c5e8774b6`, response id
+    `caresp_52181c90d41c7cb5000Rm8Mly6EKzH9K81JVEeJ7h2gV21MIi2`, status
+    `Completed`, created `5/6/26, 7:24:40 AM`, duration `7.871`, tokens in
+    `18728`, tokens out `140`, and agent version `21`. The previous fresh row
+    is
+    `caresp_ff39db10110eda0000IEoPzSeV3jwlQdOTX1qc6lE0d76uQGGw`, status
+    `Completed`, created `5/6/26, 6:41:42 AM`, duration `8.736`, tokens in
+    `18720`, tokens out `384`, and agent version `21`.
+  - An immediate extra CuaDriver recheck of the Monitor tab after the final
+    smoke failed with `Failed to start stream due to audio/video capture
+    failure`; the latest confirmed Monitor-card state remains the earlier
+    logged-in browser inspection showing `Estimated cost $0` and
+    `Total token usage 0`.
+- Files changed:
+  - `state/foundry-operate-completion-audit.md`
+  - `state/foundry-native-metrics-support-brief.md`
+  - `state/refactor-ledger.md`
+- Research / evidence used:
+  - Local CuaDriver status and permission checks.
+  - CuaDriver Accessibility tree from the logged-in Chrome Foundry Operate
+    window.
+  - Existing Azure Monitor metric checks recorded in
+    `state/foundry-native-metrics-support-brief.md`.
+  - Existing Microsoft documentation notes for Agent Monitoring Dashboard,
+    project metrics, tracing, and Chrome remote debugging behavior.
+  - Current Microsoft Agent Monitoring Dashboard docs still describe the
+    dashboard as preview, require a Foundry project with an agent plus connected
+    App Insights, and state the dashboard reads telemetry from that connected
+    App Insights resource.
+  - Current Microsoft project metrics docs still expose
+    `AgentResponses`, `AgentInputTokens`, `AgentOutputTokens`, `AgentRuns`, and
+    `AgentToolCalls` on `Microsoft.CognitiveServices/accounts/projects`, with
+    AgentId/model/status/thread/tool dimensions.
+- Tests / validation run:
+  - CuaDriver `screenshot` call returned a successful window screenshot capture
+    for window id `6335`.
+  - CuaDriver `get_window_state` returned page content for the logged-in Foundry
+    window before and after selecting `agent-lucy-prj-ncus`.
+  - CuaDriver `get_window_state` returned the fresh final
+    `caresp_52181c90d41c7cb5000Rm8Mly6EKzH9K81JVEeJ7h2gV21MIi2` row in
+    `Traces > Conversations`.
+  - `chrome-cli info -t 162556918` confirmed the Hosted Agent Monitor URL is
+    loaded and not loading after opening the agent-specific page.
+- Results:
+  - Browser/visual inspection is no longer the blocker.
+  - Native Foundry is not completely blank: the Hosted Agent `Traces >
+    Conversations` surface does show completed v21 responses with token counts.
+  - Native Operate/Monitor remains unsuitable as the go-live proof path today
+    because the selected NCUS project overview, Assets table, Hosted Agent
+    Monitor cards, and Azure Monitor project Agent metrics still lack populated
+    cost, success, token, and run-volume dashboard evidence.
+- Blockers:
+  - `Microsoft.CognitiveServices/accounts/projects` Agent metrics and Foundry
+    Operate cards still do not reflect the completed Hosted Lucy traffic.
+- Follow-ups:
+  - Keep App Insights / COO workbook evidence as the working portal proof path
+    unless Microsoft resolves the native project-metrics rollup gap or the user
+    accepts the workbook path for production.
+  - Do not mark the Foundry/Operate production gate complete until the native
+    Operate evidence path is either populated, officially replaced, or
+    explicitly waived.
+  - Current required user decision: either approve quitting/relaunching Chrome
+    Profile 1 to enable `Allow JavaScript from Apple Events` for live page
+    inspection, or explicitly accept native `Traces > Conversations` plus App
+    Insights / `Lucy Hosted COO Monitor` as the production portal evidence path.
+
+**Resume recheck 2026-05-06 14:33 UTC:**
+- Chrome state:
+  - `chrome-cli list tabs` still shows tab `162556918` as `Microsoft Foundry`.
+  - `chrome-cli info -t 162556918` shows the tab loaded at the Hosted Agent
+    Monitor URL for `agent-lucy-hosted-ncus` with `Loading: No`.
+  - Chrome AppleScript can read the active tab URL and title.
+  - `cua-driver call check_permissions` reports Accessibility and Screen
+    Recording as granted.
+  - `cua-driver call list_windows` sees Chrome pid `65519`, window id `6335`,
+    on the current Space, title `Microsoft Foundry`.
+  - Current CuaDriver `get_window_state` fails with
+    `Failed to start stream due to audio/video capture failure`.
+  - Current CuaDriver `screenshot` fails with the same ScreenCaptureKit stream
+    error.
+  - Current CuaDriver `page get_text` fails because Chrome's `Allow JavaScript
+    from Apple Events` setting is disabled.
+  - `screencapture` still fails for both display and window-specific capture.
+  - Chrome DevTools still is not listening on `127.0.0.1:9222`.
+  - System Events UI scripting still fails with `osascript is not allowed
+    assistive access`.
+  - The latest successful visual/AX inspection remains the earlier CuaDriver
+    pass in this ledger.
+- Azure evidence for 2026-05-06 14:20-14:35 UTC:
+  - App Insights `requests` returned two successful
+    `invoke_agent agent-lucy-hosted-ncus:21` rows for response
+    `caresp_52181c90d41c7cb5000Rm8Mly6EKzH9K81JVEeJ7h2gV21MIi2`, duration
+    `7871`, agent id `agent-lucy-hosted-ncus:21`, agent name
+    `agent-lucy-hosted-ncus`, version `21`, and the NCUS Foundry project id.
+  - App Insights `dependencies` returned Hosted `create_agent` and `chat` rows
+    with `gpt-5.2-chat`, input tokens `4682`, output tokens `35`, total tokens
+    `4717`, plus inner `agent-lucy-prod:8` rows.
+  - Foundry account metrics moved at 14:25 UTC:
+    `ModelRequests=1`, `InputTokens=4682`, `OutputTokens=35`,
+    `TotalTokens=4717`.
+  - Foundry project metrics for `AgentResponses`, `AgentInputTokens`,
+    `AgentOutputTokens`, `AgentRuns`, and `AgentToolCalls` remained zero for
+    every minute in the same window; project-level `InputTokens`,
+    `OutputTokens`, and `TotalTokens` returned empty timeseries.
+- Result:
+  - Current evidence still supports App Insights / COO workbook and native
+    `Traces > Conversations` as the working portal proof path.
+  - Current evidence still does not satisfy a native Operate/Monitor card gate.
+
+**Browser/Computer Use recheck 2026-05-06:**
+- Computer Use permissions became available and `get_app_state` could read the
+  local Google Chrome app state.
+- The prior local Foundry tab was no longer present. Reopening the Hosted Agent
+  Monitor URL in the local Chrome profile redirected to Microsoft sign-in.
+- Computer Use saw the local Chrome window titled `Sign in to Microsoft
+  Foundry`, but did not return the login page contents beyond the window title.
+- Browser Use / Firecrawl created a separate browser session, navigated to the
+  Foundry Operate URL, and also landed on Microsoft sign-in.
+- Browser Use returned a usable sign-in accessibility tree with email textbox,
+  `Next`, sign-in options, terms/privacy links, and troubleshooting control.
+- Browser Use live view URL for user login:
+  `https://liveview.firecrawl.dev/aHR0cHM6Ly9icm93c2VyLmZpcmVjcmF3bC5kZXYvdmlldy81NjcxZTJjYmRlNTkyNGQ0Lz90b2tlbj05YjM2YTQzN2Y0ZTAzNjcyMGZjZDliZWY0ZjRkMzRkOGFmMzMwOGQ5MDMzNDY1ZjlmMDM5ZDA2MDUyMmZlMTg2`
+- Result: Browser Use and Computer Use were confirmed viable control paths
+  after login. This failed-login note is superseded by the authenticated
+  Computer Use recheck below.
+
+**Browser/Computer Use authenticated recheck 2026-05-06:**
+- Computer Use can now read the authenticated local Google Chrome Foundry
+  session directly.
+- Project Operate URL inspected:
+  `https://ai.azure.com/nextgen/r/Ivn5FVh_Spqs_2mwYe9I4Q,agent-lucy-ncus,,agent-lucy-foundry-ncus,agent-lucy-prj-ncus/operate/overview`
+- The project Operate overview renders normally with `Overview`, `Preview`,
+  subscription `Azure subscription 1`, project selector placeholder
+  `Project: All projects (2)`, and date range `4/29/2026 - 5/6/2026` with
+  `7D` selected.
+- The Operate overview still shows `Running agents` as `1/2 agents`, but
+  native dashboard evidence is empty:
+  - `Estimated cost`: `No data to show`
+  - `Agent success rate`: `No data to show`
+  - `Token usage`: `No data to show`
+  - `Agent run volume over time`: `No data available for the selected time
+    range. Please select a different time range.`
+  - `Agent run volume` top increases/decreases: `No data to show`
+  - `Agent success rate` chart: `No data available for the selected time
+    range. Please select a different time range.`
+  - `Agent run success rate trends` top increases/decreases:
+    `No data to show`
+- Hosted Agent Monitor URL inspected:
+  `https://ai.azure.com/nextgen/r/Ivn5FVh_Spqs_2mwYe9I4Q,agent-lucy-ncus,,agent-lucy-foundry-ncus,agent-lucy-prj-ncus/build/agents/agent-lucy-hosted-ncus/monitor`
+- The Hosted Agent Monitor page renders normally for `agent-lucy-hosted-ncus`;
+  `Monitor` is selected, date range is `4/6/2026 - 5/6/2026` with `1M`
+  selected, and operational metrics still show `Estimated cost $0` plus
+  `Total token usage 0`.
+- Result: Browser/Computer inspection is no longer blocked. The portal itself
+  confirms the native Operate overview and Hosted Agent Monitor metric cards
+  remain unpopulated, while native Traces, App Insights, account metrics, and
+  the COO workbook remain the working evidence surfaces for Hosted v21 traffic.
+
+---
+
 ## Completed Plans
 
-_none yet_
+### Generic Notice Fallback + SharePoint Sync Job — COMPLETED 2026-05-06
+
+**Plan/context:** Active plan remains `001-lucy-foundry-hosted-agent-migration.md`; this completed the current `TASKS.md` notice-auth-PDF-HITL subtask captured in `state/notice-retrieval-strategy.md`.
+
+**Status:** completed.
+
+**Summary:**
+- Preserved the existing individualized notice lookup in
+  `find_notice_for_user_sync`.
+- Added a generic fallback branch only after individualized lookup misses.
+- Generic fallback resolves the authenticated member's case via the approved
+  class-member field policy, searches the same Azure Search index for the
+  case-level generic notice, prefers `generic-notices` / `Print/Notice packet`
+  paths, generates a SAS URL, records the notice PDF for the Chainlit/Hosted
+  artifact path, and returns structured grounding context.
+- Generic fallback output is marked with
+  `NOTICE_SOURCE_TYPE: generic_notice_fallback` so the response loop records a
+  terminal found status instead of replaying failed lookup every turn.
+- Added a standalone scheduled-job entry point for the daily SharePoint generic
+  notice sync. It copies PDFs from
+  `/Shared Documents/Active Cases/Settlements/{case}/Print/Notice packet` into
+  `lucycmnotices/generic-notices/{case-slug}/{filename}.pdf` by default. That
+  default is intentional because the live `lucy-notices-v2` Azure Search
+  datasources/indexers are watching `lucycmnotices` hourly, not
+  `lucygenericnotices`.
+- The sync job keeps `_sync/generic_notice_ledger.json` in the destination
+  container and skips unchanged files based on SharePoint item fingerprints
+  (`id`, eTag/cTag, size, modified time, and hashes when present).
+
+**Files changed:**
+- `agent/app/user_functions.py`
+- `agent/app/.env.example`
+- `agent/app/agent_instructions.txt`
+- `agent/app/lucy_core/responses_loop.py`
+- `agent/app/apex.py`
+- `agent/generic_notice_sync/__init__.py`
+- `agent/generic_notice_sync/sync.py`
+- `agent/generic_notice_sync/Dockerfile`
+- `agent/generic_notice_sync/README.md`
+- `agent/tests/test_generic_notice_sync.py`
+- `agent/tests/test_generic_notice_fallback.py`
+- `agent/tests/test_coa_reason_writeback.py`
+- `agent/tests/test_lucy_responses_loop.py`
+- `TASKS.md`
+- `state/notice-retrieval-strategy.md`
+
+**Research evidence used:**
+- Microsoft Graph app-only access uses the OAuth client credentials flow with
+  `https://graph.microsoft.com/.default`:
+  https://learn.microsoft.com/graph/auth-v2-service
+- Microsoft Graph DriveItem children API supports listing folder children:
+  https://learn.microsoft.com/graph/api/driveitem-list-children
+- Microsoft Graph DriveItem content API supports downloading file content:
+  https://learn.microsoft.com/graph/api/driveitem-get-content
+- Microsoft Graph site-by-path resolves the SharePoint site from host and
+  server-relative path:
+  https://learn.microsoft.com/graph/api/site-getbypath
+- Azure Blob Python SDK `upload_blob` supports creating/uploading blobs and
+  overwrite behavior:
+  https://learn.microsoft.com/azure/storage/blobs/storage-blob-upload-python
+- Azure AI Search blob indexers detect new/updated blobs and can run on a
+  schedule; live validation confirmed the `lucy-notices-v2-*` datasources use
+  `container=lucycmnotices` with hourly schedules:
+  https://learn.microsoft.com/azure/search/search-howto-indexing-azure-blob-storage
+  https://learn.microsoft.com/azure/search/search-howto-run-reset-indexers
+
+**Tests / validation run:**
+- `pytest -q agent/tests/test_generic_notice_sync.py agent/tests/test_generic_notice_fallback.py`
+  - Result: 6 passed.
+- `pytest -q agent/tests/test_generic_notice_sync.py agent/tests/test_generic_notice_fallback.py agent/tests/test_notice_tool_instructions.py agent/tests/test_lucy_field_policy.py agent/tests/test_coa_reason_writeback.py agent/tests/test_lucy_responses_loop.py agent/tests/test_lucy_artifacts.py`
+  - Result: 66 passed.
+- `pytest -q agent/tests/test_generic_notice_sync.py agent/tests/test_generic_notice_fallback.py agent/tests/test_notice_tool_instructions.py agent/tests/test_lucy_field_policy.py agent/tests/test_coa_reason_writeback.py agent/tests/test_lucy_responses_loop.py agent/tests/test_lucy_artifacts.py agent/tests/test_lucy_tool_registry.py agent/tests/test_lucy_runtime.py`
+  - Result: 84 passed.
+- `python3 -m compileall -q agent/generic_notice_sync agent/app/user_functions.py`
+  - Result: passed.
+- `graphify update .`
+  - Result: graph rebuilt to 2402 nodes / 3696 edges / 254 communities.
+
+**Results:**
+- Acceptance criteria from `state/notice-retrieval-strategy.md` are satisfied
+  for code-level behavior:
+  - individualized notice lookup still runs first;
+  - generic fallback is attempted only after miss;
+  - generic fallback uses `Print/Notice packet` as the source contract;
+  - fallback response includes natural labels for approved Dynamics context
+    and does not expose internal field names;
+  - terminal source status is logged for follow-up turn behavior.
+
+**Blockers:** none for local implementation.
+
+**Follow-ups:**
+- Deploy/configure the scheduled sync job with Graph app permissions or managed
+  identity, Blob write permission, and the real SharePoint site/drive IDs.
+- Run the sync job once in dry-run/live mode after its identity is configured,
+  then confirm a copied `generic-notices/...` PDF appears in `lucy-notices-v2`
+  after the next hourly indexer pass.
+- Run a real Hosted canary for notice-auth-PDF-HITL once the generic notice
+  blobs are present in the index.
+
+---
+
+### `tiered-notice-retrieval-generic-sync` — COMPLETED 2026-05-07
+
+**Status:** completed.
+
+**Summary:**
+- Confirmed the existing Graph app registration `sharepoint-lucy-rag-datacopy`
+  already had broad Microsoft Graph / SharePoint application permissions and a
+  valid client secret, so the sync job uses that app-only identity.
+- Built and deployed Container App Job `lucy-generic-notice-sync` in
+  `rg-apex-integration-prod` / West US, using ACR
+  `acrapexintegrationprod.azurecr.io`.
+- Scheduled the job daily at `15 3 * * *`, with a 7200-second replica timeout.
+- Confirmed live Azure Search datasources/indexers for `lucy-notices-v2` watch
+  `lucycmnotices`, so generic notice PDFs are copied under
+  `lucycmnotices/generic-notices/...` for the existing hourly vectorization
+  path.
+- Live SharePoint validation showed the literal
+  `{case}/Print/Notice packet` folder is often absent. The sync now tries that
+  folder first, then falls back to one direct file under `{case}/Print` matching
+  notice-packet/class-notice naming.
+- The selector now returns exactly one selected source per case, excludes
+  obvious individualized/unsafe source names containing `mail merge`,
+  `for merge`, or `ssn`, and makes Azure Blob metadata ASCII-safe.
+- Microsoft Graph Word-to-PDF conversion failures are non-fatal: the bad source
+  is counted as failed and the job continues.
+
+**Files changed:**
+- `agent/generic_notice_sync/sync.py`
+- `agent/tests/test_generic_notice_sync.py`
+
+**Live Azure validation:**
+- Final deployed image:
+  `acrapexintegrationprod.azurecr.io/generic-notice-sync:generic-notice-sync-20260507031007`
+  (`sha256:3c710919011ce6e7a5b762f5d4407a575a36dee1946f3b36deddfb66490a5173`).
+- Clean execution: `lucy-generic-notice-sync-f0s3tgx`
+  - status: `Succeeded`
+  - start: `2026-05-07T03:12:32+00:00`
+  - end: `2026-05-07T03:28:13+00:00`
+  - copied blobs under `generic-notices`: `463`
+  - duplicate case folders: `0`
+  - excluded source-name hits in destination for mail-merge / for-merge / SSN
+    patterns: `0`
+  - ledger blob `_sync/generic_notice_ledger.json`: exists
+
+**Tests / validation run:**
+- `python3 -m compileall -q agent/generic_notice_sync agent/app/user_functions.py`
+  - Result: passed.
+- `pytest -q agent/tests/test_generic_notice_sync.py agent/tests/test_generic_notice_fallback.py`
+  - Result: 10 passed.
+- `graphify update .`
+  - Result: graph rebuilt to 2414 nodes / 3727 edges / 258 communities.
+
+**Results:**
+- The generic notice sync is live, scheduled, and proven to progress through the
+  real SharePoint corpus while copying at most one selected generic notice PDF
+  per case into the existing west-coast blob/indexing path.
+- Lucy code path still attempts individualized notice retrieval first, then
+  falls back to the generic notice in Azure Search when no individualized notice
+  is found.
+
+**Blockers:** none.
+
+**Follow-ups:**
+- Confirm the hourly Azure Search indexer surfaces the new
+  `generic-notices/...` blobs in `lucy-notices-v2`.
+- Run a Hosted/Chainlit canary where individualized notice lookup misses and
+  generic fallback opens the PDF drawer with member-specific Dynamics context.
 
 ---
 
@@ -1104,7 +2299,13 @@ _none_
 
 ## Restored / Current Target Scope
 
-- **Plan 001 Phases 3-8** (Hosted Agent container, hosted-agent identity/RBAC, hosted-agent canary/cutover) — restored 2026-04-28 as the golden path. The AI Gateway custom-agent route remains an interim bridge and diagnostic fallback, not the desired end-state.
+- **Plan 001 Phases 3-8** (Hosted Agent container, hosted-agent identity/RBAC, hosted-agent canary/cutover) — restored 2026-04-28 as the golden path. The AI Gateway custom-agent route was retired and deleted on 2026-05-04.
+- **Tiered notice retrieval strategy** — added to active scope 2026-05-06 from
+  user handoff. Lucy should try individualized notice PDFs first, then fall back
+  to the generic notice under `Print/Notice packet`, grounding the explanation
+  in the notice text and enriching with allowed Dynamics member fields. Details
+  and acceptance criteria are captured in
+  `state/notice-retrieval-strategy.md`.
 
 ---
 

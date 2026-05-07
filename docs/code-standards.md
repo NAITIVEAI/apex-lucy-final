@@ -87,10 +87,9 @@ Every code change must be traceable to a plan file:
 
 1. Read `state/refactor-ledger.md`.
 2. Read **exactly one** active `plans/*.md` file (lowest-numbered incomplete or already-in-progress).
-3. Load `.agents/skills/lucy-spec-implementation/SKILL.md`.
-4. Use the source-of-truth hierarchy: explicit user instruction → `AGENTS.md` → active plan → skill → existing code patterns.
-5. Produce a proposal-before-edit brief; only then make the smallest safe change.
-6. Update the ledger with files changed, tests run, blockers, and follow-ups.
+3. Use the source-of-truth hierarchy: explicit user instruction → `AGENTS.md` → active plan → existing code patterns.
+4. Produce a proposal-before-edit brief; only then make the smallest safe change.
+5. Update the ledger with files changed, tests run, blockers, and follow-ups.
 
 The expected plan files are `001-notice-path.md` through `005-regression-validation.md`. Read [`AGENTS.md`](../AGENTS.md) for the full contract — do not paraphrase it.
 

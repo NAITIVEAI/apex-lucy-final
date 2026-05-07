@@ -9,6 +9,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "agent" / "app"))
 
 from lucy_core.responses_loop import (
     _apply_request_reasoning,
+    _classify_notice_tool_output,
     _metric_instruments,
     build_authenticated_state_items,
     collect_response_telemetry,
@@ -54,7 +55,10 @@ class _MockOpenAIClient:
                 outer.create_calls.append(kwargs)
                 if not outer._queue:
                     raise AssertionError("No more queued responses for mock client")
-                return outer._queue.pop(0)
+                item = outer._queue.pop(0)
+                if isinstance(item, BaseException):
+                    raise item
+                return item
 
         self.responses = _Responses()
 
@@ -130,6 +134,29 @@ class BuildAuthenticatedStateItemsTests(unittest.TestCase):
         self.assertEqual(len(items), 2)
         self.assertIn("notice", items[0]["content"])
         self.assertIn("A123", items[1]["content"])
+
+    def test_notice_miss_routes_followups_to_dynamics(self):
+        s = LucySession(
+            session_id="x",
+            authenticated=True,
+            apex_id="A123",
+            user_name="Jane",
+            metadata={
+                "notice_lookup_status": "not_found",
+                "notice_lookup_apex_id": "A123",
+            },
+        )
+        items = build_authenticated_state_items(s)
+        combined = "\n".join(item["content"] for item in items)
+        self.assertIn("no PDF was available", combined)
+        self.assertIn("do not call the notice/PDF lookup again", combined)
+        self.assertIn("Use Dynamics", combined)
+        self.assertIn("A123", combined)
+
+    def test_generic_notice_fallback_is_terminal_found_status(self):
+        output = "NOTICE_SOURCE_TYPE: generic_notice_fallback\nI found the generic notice packet."
+
+        self.assertEqual(_classify_notice_tool_output(output), "found")
 
 
 class ExtractV2FunctionCallsTests(unittest.TestCase):
@@ -751,6 +778,45 @@ class RunResponseV2Tests(unittest.IsolatedAsyncioTestCase):
                 function_registry={},
             )
         self.assertEqual(session.conversation_id, "conv-x")
+
+    async def test_stale_conversation_id_is_cleared_and_retried_once(self):
+        """Hosted/playground can hand back a stale conversation id; retry cleanly once."""
+        mock_client = _MockOpenAIClient(
+            [
+                RuntimeError(
+                    "Error code: 400 - {'error': {'code': 'conversation_not_found', "
+                    "'message': \"Conversation with id 'conv-stale' not found.\"}}"
+                ),
+                _MockResponse(
+                    response_id="r-retry",
+                    output_text="fresh response",
+                    conversation_id="conv-fresh",
+                ),
+            ]
+        )
+        session = LucySession(
+            session_id="s-1",
+            conversation_id="conv-stale",
+            previous_response_id="resp-stale",
+        )
+
+        with self._clean_env():
+            result = await run_response_v2(
+                user_text="hi again",
+                session=session,
+                openai_client=mock_client,
+                agent_name="lucy",
+                agent_version="4",
+                function_registry={},
+            )
+
+        self.assertEqual(result["text"], "fresh response")
+        self.assertEqual(len(mock_client.create_calls), 2)
+        self.assertIn("conversation", mock_client.create_calls[0])
+        self.assertNotIn("conversation", mock_client.create_calls[1])
+        self.assertNotIn("previous_response_id", mock_client.create_calls[1])
+        self.assertEqual(session.conversation_id, "conv-fresh")
+        self.assertEqual(session.previous_response_id, "r-retry")
 
 
 if __name__ == "__main__":

@@ -19,6 +19,7 @@ from datetime import datetime
 import hashlib
 import pickle
 from pathlib import Path
+from lucy_field_policy import LUCY_AUTH_FIELDS, select_clause
 
 logger = logging.getLogger(__name__)
 
@@ -260,7 +261,7 @@ class AgenticAuthenticator:
         Execute a query with error handling and fallback
         """
         try:
-            select_fields = "new_classmemberid,new_firstname,new_lastname,new_fullname,new_middlename,new_apexid,new_shortsocial"
+            select_fields = select_clause(("new_classmemberid",) + LUCY_AUTH_FIELDS)
             
             # Use the existing query_entity_sync function
             result_str = self.query_function('query_entity_sync', 'new_classmembers', filter_str, select_fields)

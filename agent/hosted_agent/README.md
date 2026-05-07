@@ -3,8 +3,8 @@
 This adapter runs Lucy as a Microsoft Foundry Hosted Agent using the Responses
 protocol. It is the production target for first-class Foundry evals, traces,
 monitoring, dashboarding, versioning, and managed runtime lifecycle. The
-existing AI Gateway/APIM route remains a rollback and diagnostics bridge until
-Hosted Agent parity is proven.
+previous AI Gateway/APIM bridge was retired after the Hosted route became the
+selected path.
 
 ## Local Smoke
 
@@ -28,9 +28,10 @@ The protocol library owns `/responses` and `/readiness`.
 
 ## Current North Central US Canary
 
-East US2 is still the production member-facing region for the current ACA and
-gateway bridge, but Hosted Agents were not available there during the first
-launch attempt. The current Hosted Agent canary is in North Central US:
+East US2 is still the member-facing region for the current Chainlit ACA, but the
+old AI Gateway/APIM bridge has been deleted. Hosted Agents were not available
+there during the first launch attempt, so the current Hosted Agent canary is in
+North Central US:
 
 - Resource group: `agent-lucy-ncus`
 - Foundry account: `agent-lucy-foundry-ncus`
@@ -39,9 +40,9 @@ launch attempt. The current Hosted Agent canary is in North Central US:
   `https://agent-lucy-foundry-ncus.services.ai.azure.com/api/projects/agent-lucy-prj-ncus`
 - ACR: `agentlucyacrncus.azurecr.io`
 - Model deployment: `gpt-5.2-chat`
-- Hosted Agent: `agent-lucy-hosted-ncus:20`
-- Inner prompt agent: `agent-lucy-prod:6`
-- Hosted image:
+- Hosted Agent: `agent-lucy-hosted-ncus:21`
+- Inner prompt agent: `agent-lucy-prod:8`
+- Last documented hosted image:
   `agentlucyacrncus.azurecr.io/agent-lucy-hosted:hosted-pr2-20260504102638-operatechatspan`
 
 The basic SDK smoke is green:
@@ -68,24 +69,25 @@ Expected smoke result: `completed None` with a short Lucy response.
 
 - App Insights telemetry is landing for Hosted Agent traffic, including the
   outer hosted request and dependencies for `create_agent`,
-  `invoke_agent agent-lucy-prod:6`, `execute_tool`, and the
+  `invoke_agent agent-lucy-prod:8`, `execute_tool`, and the
   `gpt-5.2-chat-2025-12-11` model call.
-- Version 20 response creation is green for Hosted wrapper
+- Version 21 response creation is green for Hosted wrapper
   response ids. The adapter keeps Hosted `caresp_...` / `conv_...` identifiers
   as Foundry metadata but does not forward them as inner prompt-agent
   conversation state.
-- A fresh Operate telemetry SDK smoke on 2026-05-04 returned
-  `caresp_2fb55937c05798c300kxfQqrvat8JXYmHvNWqKUzsyX7mod9So`,
-  `status=completed`, `error=None`, and output
-  `Lucy hosted operate chat span online.`
+- Fresh Hosted v21 REST smokes on 2026-05-06 returned
+  `caresp_65a1ddd2d4dcc73700KUIfwqFoHdZZJLFBxGfSc8HTMpmdNo1s`,
+  `caresp_b41756284523295400kHMouXPVPnbF9ek9IBxWU37rbrScSIkE`, and
+  `caresp_c0208595c364d6f400q3jDeh60dxrZ3GxpX6B9kyzEP8AjuyAp`, all with
+  `status=completed`, `error=None`, and assistant output text.
 - Version 13 target evaluation completed successfully with output text, model
   usage, and `passed=1`, `failed=0`, `errored=0`:
   `evalrun_b03b7e0521e642c6986d3e84e10b65a3`.
-- Version 20 telemetry confirms canonical agent dimensions on hosted request,
+- Version 21 telemetry confirms canonical agent dimensions on hosted request,
   `create_agent`, `chat`, and model/tool rows:
   `gen_ai.agent.name=agent-lucy-hosted-ncus`,
-  `gen_ai.agent.id=agent-lucy-hosted-ncus:20`, and
-  `gen_ai.agent.version=20`. Hosted `create_agent` and `chat` rows also carry
+  `gen_ai.agent.id=agent-lucy-hosted-ncus:21`, and
+  `gen_ai.agent.version=21`. Hosted `create_agent` and `chat` rows also carry
   `gen_ai.provider.name=azure.ai.foundry`,
   `gen_ai.response.model=gpt-5.2-chat`, and populated
   `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`, and
@@ -94,22 +96,39 @@ Expected smoke result: `completed None` with a short Lucy response.
   Hosted agent, model, and Foundry project dimensions. The stale custom
   `gen_ai.agents.id=lucy-aca` dimension is no longer emitted by Lucy's custom
   response loop.
-- Version 20 also carries the explicit AI Search project connection ID and
+- Version 21 also carries the explicit AI Search project connection ID and
   disables Chainlit-only dashboard route registration in the Hosted process.
-- Version 20 aligns `MODEL_DEPLOYMENT_NAME`, `AZURE_AGENT_MODEL`, and
+- Version 21 includes a stale-conversation recovery fix: if the inner Responses
+  API reports `conversation_not_found`, Lucy clears the stored conversation
+  handle and retries once with a fresh agent reference.
+- Version 21 aligns `MODEL_DEPLOYMENT_NAME`, `AZURE_AGENT_MODEL`, and
   `AZURE_GPT_MODEL` to `gpt-5.2-chat`; `MODEL_DEPLOYMENT_NAME` wins in Lucy's
   code path, so leaving it at base `gpt-5.2` silently routes the inner prompt
   agent to the wrong model lane.
+- The NCUS portal should show both `agent-lucy-hosted-ncus` and
+  `agent-lucy-prod`. That is expected: the hosted agent is the container wrapper,
+  while the prompt agent is the inner Lucy reasoning/tool agent.
 - The Operate/Application Analytics workbook-shaped KQL now returns non-zero
   Hosted `chat` rows/tokens from App Insights. The older native Build Monitor
-  project metrics path still shows `$0` and `Total token usage 0` after v20
-  traffic. The page's own cost API returns hosted token totals, but its Azure
+  project metrics path still shows zeros after v21 traffic. The page's own cost
+  API has previously returned hosted token totals, but its Azure
   Monitor project metrics calls still return empty
   or zero `AgentResponses`, `AgentInputTokens`, `AgentOutputTokens`,
   `AgentRuns`, and `AgentToolCalls` timeseries even after fresh SDK traffic.
+  Foundry account model metrics do show non-zero `ModelRequests`, `InputTokens`,
+  `OutputTokens`, and `TotalTokens` for the same smoke window, so the remaining
+  gap is the project Agent metric rollup, not model/runtime execution.
   The current COO-safe fallback is the Azure Monitor workbook
   `Lucy Hosted COO Monitor` (`d93d5898-c385-40ff-978e-eea3dbf03332`) on App Insights
   `agent-lucy-appins-eus2`.
+- A temporary published Agent Application route for `agent-lucy-hosted-ncus:21`
+  was tested on 2026-05-06 because the only durable published application was
+  `agent-lucy-prod` (Managed, prompt-agent v8). ARM accepted a Hosted deployment
+  and it reached Running, but the live application-scoped Responses endpoint
+  rejected it with `Application-scoped routes only support prompt agents. Agent
+  kind 'hosted' is not supported.` The temporary Hosted application/deployment
+  were stopped and deleted. Do not recreate this as an observability workaround
+  unless Microsoft changes Hosted support for Agent Application routes.
 - Continuous evaluation is enabled for the inner prompt agent
   `agent-lucy-prod` and produces completed runs.
 - Continuous evaluation rules targeting the outer Hosted Agent
@@ -117,6 +136,19 @@ Expected smoke result: `completed None` with a short Lucy response.
   runs failed with `session_not_accessible`; a v13 one-off Hosted target eval
   passed after the adapter stopped forwarding Hosted wrapper ids to the inner
   prompt agent.
+- If the built-in preview workbook is blank or flaky, use the fallback KQL
+  runbook at [docs/operations/hosted-agent-observability-fallback.md](../../docs/operations/hosted-agent-observability-fallback.md).
+
+## Retired Gateway Bridge
+
+The abandoned East US2 AI Gateway path was removed on 2026-05-04:
+
+- APIM `apexclassaction-ai-gw` was deleted.
+- Gateway-only ACA `agent-lucy-gateway-eus2` was deleted.
+- The member-facing Chainlit ACA `agent-lucy-eus2` remains running separately.
+
+Do not recreate the gateway bridge unless the Hosted route is explicitly
+abandoned again.
 
 ## Build And Push
 
