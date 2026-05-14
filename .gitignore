@@ -62,3 +62,7 @@ KNOWNS.md
 opencode.json
 OPENCODE.md
 graphify-out/
+
+# Root Chainlit config is generated when running from the repo root.
+# The real app config is tracked under agent/app/.chainlit/.
+/.chainlit/
