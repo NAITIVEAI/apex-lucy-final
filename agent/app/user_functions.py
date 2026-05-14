@@ -67,10 +67,13 @@ from datetime import datetime, timedelta, timezone
 from azure.storage.blob import BlobServiceClient, BlobSasPermissions, generate_blob_sas, BlobClient
 import chainlit as cl
 from lucy_field_policy import (
+    CLASS_MEMBER_INTERNAL_FIELDS,
     CLASS_MEMBER_ENTITY_SET,
+    LUCY_AUTH_FIELDS,
     LUCY_CLASS_MEMBER_UPDATE_FIELDS,
     LUCY_SYSTEM_WRITE_FIELDS,
     MEMBER_DISBURSEMENT_ENTITY_SET,
+    NOTICE_TEMPLATE_SCHEMA_MAP,
     class_member_fields_for_outcome,
     filter_record,
     member_disbursement_fields,
@@ -92,28 +95,364 @@ _notice_pdf_lock = Lock()
 _NOTICE_MAX_AGE_SECONDS = 600
 GENERIC_NOTICE_CONTAINER = "lucycmnotices"
 GENERIC_NOTICE_BLOB_PREFIX = "generic-notices"
+GENERIC_NOTICE_SOURCE_REGION = "westus"
 
-_GENERIC_NOTICE_MEMBER_FIELDS = (
-    "new_estimatedsettlementamount",
-    "new_classworkweeks",
-    "cr7fe_classcountmetric",
-    "new_pagaweeks",
-    "cr7fe_pagacountmetric",
-    "new_projectcoordinator",
-    "new_potentialclassmemberstatus",
-    "new_settlementwebsitecm",
+_GENERIC_NOTICE_MEMBER_FIELDS = tuple(
+    str(mapping["d365_field"])
+    for mapping in NOTICE_TEMPLATE_SCHEMA_MAP.values()
+    if mapping.get("d365_entity") == CLASS_MEMBER_ENTITY_SET
 )
 
 _GENERIC_NOTICE_FIELD_LABELS = {
-    "new_estimatedsettlementamount": "Estimated settlement amount",
-    "new_classworkweeks": "Class count",
-    "cr7fe_classcountmetric": "Class count metric",
-    "new_pagaweeks": "PAGA count",
-    "cr7fe_pagacountmetric": "PAGA count metric",
-    "new_projectcoordinator": "Project coordinator",
-    "new_potentialclassmemberstatus": "Member status",
-    "new_settlementwebsitecm": "Settlement website",
+    str(mapping["d365_field"]): str(mapping["label"])
+    for mapping in NOTICE_TEMPLATE_SCHEMA_MAP.values()
+    if mapping.get("d365_entity") == CLASS_MEMBER_ENTITY_SET
 }
+
+
+def _generic_notice_container_name() -> str:
+    return (
+        os.getenv("LUCY_GENERIC_NOTICE_CONTAINER")
+        or os.getenv("AZURE_GENERIC_NOTICE_CONTAINER")
+        or GENERIC_NOTICE_CONTAINER
+    )
+
+
+def _generic_notice_blob_prefix() -> str:
+    return (os.getenv("GENERIC_NOTICE_BLOB_PREFIX") or GENERIC_NOTICE_BLOB_PREFIX).strip("/")
+
+
+def _generic_notice_source_region() -> str:
+    return os.getenv("LUCY_NOTICE_SOURCE_REGION") or os.getenv("AZURE_NOTICE_SOURCE_REGION") or GENERIC_NOTICE_SOURCE_REGION
+
+
+def _slugify_case_name(case_name: str) -> str:
+    slug = re.sub(r"[^A-Za-z0-9]+", "-", case_name or "").strip("-").lower()
+    return slug or "unknown-case"
+
+
+def _slugify_case_alias(case_name: str, *, expand_ampersand: bool = False) -> str:
+    value = (case_name or "").replace("&", " and ") if expand_ampersand else (case_name or "")
+    return _slugify_case_name(value)
+
+
+def _case_notice_slug_candidates(case_name: str) -> List[str]:
+    """Return case-name aliases used to match generic notices in the flat corpus."""
+    raw = (case_name or "").strip()
+    if not raw:
+        return []
+
+    candidates = [raw]
+    # D365 titles often include plaintiff v. defendant while SharePoint case
+    # folders may use only the defendant/business name.
+    parts = re.split(r"\s+v(?:s\.?|\.?)\s+", raw, maxsplit=1, flags=re.IGNORECASE)
+    if len(parts) == 2 and parts[1].strip():
+        candidates.append(parts[1].strip())
+
+    ordered: List[str] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        slugs = [
+            _slugify_case_alias(candidate),
+            _slugify_case_alias(candidate, expand_ampersand=True),
+        ]
+        expanded = _slugify_case_alias(candidate, expand_ampersand=True)
+        tokens = [token for token in expanded.split("-") if token]
+        for size in (3, 2):
+            if len(tokens) >= size:
+                slugs.append("-".join(tokens[:size]))
+        for slug in slugs:
+            if slug and slug not in seen:
+                seen.add(slug)
+                ordered.append(slug)
+    return ordered
+
+
+GENERIC_NOTICE_TRAILING_TERMS = (
+    "class",
+    "copy",
+    "draft",
+    "en",
+    "english",
+    "es",
+    "final",
+    "form",
+    "mailing",
+    "merge",
+    "notice",
+    "packet",
+    "pdf",
+    "redacted",
+    "remail",
+    "revised",
+    "revision",
+    "settlement",
+    "short",
+    "spanish",
+    "version",
+    "working",
+)
+
+
+def _looks_like_member_specific_notice_name(name: str) -> bool:
+    stem = re.sub(r"\.[^.]+$", "", (name or "").strip())
+    parts = [part.strip(" '\"") for part in re.split(r"\s[-–—]\s", stem) if part.strip()]
+    if len(parts) < 2:
+        return False
+
+    if _is_person_name_fragment(parts[-1]):
+        return True
+    first_words = re.findall(r"[A-Za-z]+", parts[0])
+    has_middle_initial = bool(re.search(r"\b[A-Z]\b", parts[0]))
+    strong_leading_name = len(first_words) >= 3 or has_middle_initial
+    return (
+        "notice" in " ".join(parts[1:]).lower()
+        and strong_leading_name
+        and _is_person_name_fragment(parts[0])
+    )
+
+
+def _is_person_name_fragment(value: str) -> bool:
+    fragment = (value or "").strip(" '\"")
+    if not fragment or re.search(r"\d", fragment):
+        return False
+    lowered = fragment.lower()
+    business_terms = {
+        "agency",
+        "authority",
+        "case",
+        "center",
+        "company",
+        "contractors",
+        "corp",
+        "corporation",
+        "group",
+        "health",
+        "hospital",
+        "inc",
+        "llc",
+        "lp",
+        "ltd",
+        "management",
+        "medical",
+        "services",
+        "systems",
+    }
+    if any(term in lowered.split() for term in business_terms):
+        return False
+    words = re.findall(r"[A-Za-z][A-Za-z']+", fragment)
+    if len(words) < 2 or len(words) > 4:
+        return False
+    lowered_words = {word.lower() for word in words}
+    if lowered_words.intersection(GENERIC_NOTICE_TRAILING_TERMS):
+        return False
+    short_words = {"a", "d", "de", "del", "di", "la", "le", "van", "von"}
+    return all(
+        word.lower() in short_words or (word[0].isupper() and not word.isupper())
+        for word in words
+    )
+
+
+def _notice_source_score_from_name(name: str) -> tuple[int, str]:
+    lowered = (name or "").lower()
+    score = 0
+    if lowered.endswith(".pdf"):
+        score += 50
+    if "notice packet" in lowered:
+        score += 40
+    if "class notice" in lowered:
+        score += 30
+    if "notice" in lowered:
+        score += 10
+    if lowered.endswith("generic-notice.pdf") or "--generic-notice.pdf" in lowered:
+        score += 80
+    if "mail merge" in lowered or "for merge" in lowered or "ssn" in lowered:
+        score -= 1000
+    if _looks_like_member_specific_notice_name(name):
+        score -= 800
+    if "draft" in lowered or "old" in lowered or "copy" in lowered:
+        score -= 20
+    return score, lowered
+
+
+def _blob_service_client_for_notices():
+    connection_string = os.getenv("AZURE_STORAGE_CONNECTION_STRING")
+    if connection_string:
+        return BlobServiceClient.from_connection_string(connection_string)
+
+    account_name = os.getenv("AZURE_STORAGE_ACCOUNT_NAME")
+    if not account_name:
+        raise RuntimeError("AZURE_STORAGE_ACCOUNT_NAME or AZURE_STORAGE_CONNECTION_STRING is required")
+
+    from azure.identity import DefaultAzureCredential
+
+    return BlobServiceClient(
+        f"https://{account_name}.blob.core.windows.net",
+        credential=DefaultAzureCredential(exclude_shared_token_cache_credential=False),
+    )
+
+
+def _list_generic_notice_blobs(container_client, prefix: str):
+    try:
+        return list(container_client.list_blobs(name_starts_with=prefix, include=["metadata"]))
+    except TypeError:
+        return list(container_client.list_blobs(name_starts_with=prefix))
+
+
+def _blob_metadata(blob: Any) -> Dict[str, str]:
+    metadata = getattr(blob, "metadata", {}) or {}
+    if not isinstance(metadata, dict):
+        return {}
+    return {str(key): str(value) for key, value in metadata.items()}
+
+
+def _generic_notice_display_name(blob_name: str, metadata: Dict[str, str]) -> str:
+    original = str(metadata.get("original_file_name") or "").strip()
+    if original.lower().endswith(".pdf"):
+        return original.split("/")[-1]
+
+    base_name = str(blob_name or "").split("/")[-1]
+    match = re.match(r"^[a-z0-9-]+--[0-9a-f]{8}--(.+\.pdf)$", base_name, flags=re.IGNORECASE)
+    if match:
+        return match.group(1)
+    return base_name or "Notice packet.pdf"
+
+
+def _generic_notice_case_identity(blob_name: str, metadata: Dict[str, str], case_title: str) -> Dict[str, str]:
+    base_name = str(blob_name or "").split("/")[-1]
+    match = re.match(
+        r"^([a-z0-9-]+)--([0-9a-f]{8})--generic-notice\.pdf$",
+        base_name,
+        flags=re.IGNORECASE,
+    )
+    blob_slug = match.group(1).lower() if match else ""
+    blob_key = match.group(2).lower() if match else ""
+    metadata_slug = _slugify_case_name(metadata.get("case_slug") or metadata.get("case_name") or "")
+    case_slug = metadata_slug or blob_slug
+    if not case_slug:
+        slug_candidates = _case_notice_slug_candidates(case_title)
+        case_slug = slug_candidates[0] if slug_candidates else ""
+    case_key = str(metadata.get("case_key") or blob_key or "").strip().lower()
+    identity = {
+        "case_slug": case_slug,
+        "case_key": case_key,
+    }
+    if case_slug and case_key:
+        identity["case_lookup_key"] = f"{case_slug}--{case_key}"
+    elif case_slug:
+        identity["case_lookup_key"] = case_slug
+    return identity
+
+
+def _generic_notice_blob_matches(blob_name: str, metadata: Dict[str, str], slug_candidates: List[str]) -> bool:
+    lowered_name = str(blob_name or "").lower().lstrip("/")
+    if not lowered_name.endswith(".pdf"):
+        return False
+    source_name = metadata.get("source_file_name") or metadata.get("original_file_name") or ""
+    if source_name and _looks_like_member_specific_notice_name(source_name):
+        return False
+
+    prefix = _generic_notice_blob_prefix().lower()
+    relative_name = lowered_name
+    if prefix and relative_name.startswith(f"{prefix}/"):
+        relative_name = relative_name[len(prefix) + 1 :]
+
+    metadata_slug = _slugify_case_name(metadata.get("case_slug") or metadata.get("case_name") or "")
+    if metadata_slug in slug_candidates:
+        return True
+
+    for slug in slug_candidates:
+        if relative_name.startswith(f"{slug}--"):
+            return True
+        if relative_name.startswith(f"{slug}/"):
+            return True
+    return False
+
+
+def _generic_notice_blob_match_score(blob_name: str, metadata: Dict[str, str], slug_candidates: List[str]) -> tuple[int, str]:
+    raw_name = str(blob_name or "").lstrip("/")
+    lowered_name = raw_name.lower()
+    prefix = _generic_notice_blob_prefix().lower()
+    relative_name = lowered_name
+    if prefix and relative_name.startswith(f"{prefix}/"):
+        relative_name = relative_name[len(prefix) + 1 :]
+
+    score, sort_name = _notice_source_score_from_name(raw_name)
+    metadata_slug = _slugify_case_name(metadata.get("case_slug") or metadata.get("case_name") or "")
+    if metadata_slug in slug_candidates:
+        score += 500
+    for slug in slug_candidates:
+        if relative_name.startswith(f"{slug}--"):
+            score += 450
+        elif relative_name.startswith(f"{slug}/"):
+            score += 300
+    if "/" not in relative_name:
+        score += 100
+    return score, sort_name
+
+
+def get_case_notice(case_id: str, case_title: Optional[str] = None) -> Optional[Dict[str, str]]:
+    """Resolve the best generic case notice PDF from the West flat-prefix corpus."""
+    clean_case_id = str(case_id or "").strip()
+    resolved_title = str(case_title or "").strip()
+    if not resolved_title and clean_case_id:
+        resolved_title = _fetch_case_title_by_id(clean_case_id)
+    if not resolved_title:
+        return None
+
+    storage_account = os.getenv("AZURE_STORAGE_ACCOUNT_NAME")
+    if not storage_account:
+        logger.error("AZURE_STORAGE_ACCOUNT_NAME not set for case notice lookup")
+        return None
+
+    container_name = _generic_notice_container_name()
+    try:
+        service_client = _blob_service_client_for_notices()
+        container_client = service_client.get_container_client(container_name)
+        prefix = _generic_notice_blob_prefix()
+        list_prefix = f"{prefix}/" if prefix else ""
+        slug_candidates = _case_notice_slug_candidates(resolved_title)
+        candidates = [
+            blob
+            for blob in _list_generic_notice_blobs(container_client, list_prefix)
+            if _generic_notice_blob_matches(
+                str(getattr(blob, "name", "")),
+                _blob_metadata(blob),
+                slug_candidates,
+            )
+        ]
+    except Exception as lookup_err:
+        logger.warning("[Lucy] Failed to list generic case notices for %s: %s", resolved_title, lookup_err)
+        return None
+
+    if not candidates:
+        return None
+
+    selected = sorted(
+        candidates,
+        key=lambda blob: _generic_notice_blob_match_score(
+            str(getattr(blob, "name", "")),
+            _blob_metadata(blob),
+            _case_notice_slug_candidates(resolved_title),
+        ),
+        reverse=True,
+    )[0]
+    blob_name = str(getattr(selected, "name", "")).lstrip("/")
+    if not blob_name:
+        return None
+    metadata = _blob_metadata(selected)
+    case_identity = _generic_notice_case_identity(blob_name, metadata, resolved_title)
+
+    return {
+        "case_id": clean_case_id,
+        "case_title": resolved_title,
+        "source_region": _generic_notice_source_region(),
+        "container": container_name,
+        "blob_name": blob_name,
+        "display_name": _generic_notice_display_name(blob_name, metadata),
+        "blob_url": f"https://{storage_account}.blob.core.windows.net/{container_name}/{blob_name}",
+        **case_identity,
+    }
 
 
 def _normalize_notice_apex_id(apex_id: Optional[str]) -> str:
@@ -193,7 +532,29 @@ def _fetch_generic_notice_member_record(apex_id: str) -> Optional[Dict[str, Any]
         return None
     try:
         escaped_apex_id = apex_id.upper().replace("'", "''")
-        selected_fields = class_member_fields_for_outcome("status", include_internal=True)
+        desired_fields = (
+            CLASS_MEMBER_INTERNAL_FIELDS
+            + LUCY_AUTH_FIELDS
+            + (
+                "new_firstname",
+                "new_lastname",
+                "new_fullname",
+                "new_address",
+                "new_city",
+                "new_state",
+                "new_zip",
+            )
+            + _GENERIC_NOTICE_MEMBER_FIELDS
+        )
+        entity_fields = _get_entity_fields_cached(CLASS_MEMBER_ENTITY_SET)
+        if entity_fields:
+            selected_fields = tuple(
+                field
+                for field in desired_fields
+                if field in entity_fields or (field.startswith("_") and field.endswith("_value"))
+            )
+        else:
+            selected_fields = desired_fields
         result_str = query_entity_sync(
             CLASS_MEMBER_ENTITY_SET,
             filter_str=f"new_apexid eq '{escaped_apex_id}'",
@@ -207,16 +568,14 @@ def _fetch_generic_notice_member_record(apex_id: str) -> Optional[Dict[str, Any]
     return None
 
 
-def _fetch_case_title_for_member(member_record: Optional[Dict[str, Any]]) -> str:
-    if not member_record:
-        return ""
-    case_guid = str(member_record.get("_new_case_value") or "").strip()
-    if not case_guid:
+def _fetch_case_title_by_id(case_guid: str) -> str:
+    if not DYNAMICS_ENABLED or not case_guid:
         return ""
     try:
+        safe_case_guid = str(case_guid).strip().replace("'", "''")
         result_str = query_entity_sync(
             "incidents",
-            filter_str=f"incidentid eq '{case_guid}'",
+            filter_str=f"incidentid eq '{safe_case_guid}'",
             select="incidentid,ticketnumber,title",
         )
         result = json.loads(result_str)
@@ -228,20 +587,31 @@ def _fetch_case_title_for_member(member_record: Optional[Dict[str, Any]]) -> str
     return ""
 
 
+def _fetch_case_title_for_member(member_record: Optional[Dict[str, Any]]) -> str:
+    if not member_record:
+        return ""
+    case_guid = str(member_record.get("_new_case_value") or "").strip()
+    if not case_guid:
+        return ""
+    return _fetch_case_title_by_id(case_guid)
+
+
 def _generic_notice_candidate_score(result: Dict[str, Any], case_title: str) -> int:
     path = str(result.get("metadata_storage_path") or "").lower()
     name = str(result.get("metadata_storage_name") or "").lower()
     combined = f"{path} {name}"
     score = 0
     container_name = (
-        os.getenv("AZURE_GENERIC_NOTICE_CONTAINER")
+        os.getenv("LUCY_GENERIC_NOTICE_CONTAINER")
+        or os.getenv("AZURE_GENERIC_NOTICE_CONTAINER")
         or os.getenv("AZURE_STORAGE_CONTAINER_NAME")
         or os.getenv("AZURE_STORAGE_CONTAINER")
         or GENERIC_NOTICE_CONTAINER
     ).lower()
     if container_name in combined:
         score += 100
-    if GENERIC_NOTICE_BLOB_PREFIX in combined:
+    configured_prefix = _generic_notice_blob_prefix()
+    if configured_prefix and configured_prefix.lower() in combined:
         score += 100
     if "notice packet" in combined or "notice%20packet" in combined:
         score += 50
@@ -261,7 +631,8 @@ def _is_generic_notice_candidate(result: Dict[str, Any]) -> bool:
     name = str(result.get("metadata_storage_name") or "").lower()
     combined = f"{path} {name}"
     container_name = (
-        os.getenv("AZURE_GENERIC_NOTICE_CONTAINER")
+        os.getenv("LUCY_GENERIC_NOTICE_CONTAINER")
+        or os.getenv("AZURE_GENERIC_NOTICE_CONTAINER")
         or os.getenv("AZURE_STORAGE_CONTAINER_NAME")
         or os.getenv("AZURE_STORAGE_CONTAINER")
         or GENERIC_NOTICE_CONTAINER
@@ -269,13 +640,37 @@ def _is_generic_notice_candidate(result: Dict[str, Any]) -> bool:
     return any(
         marker and marker in combined
         for marker in (
-            GENERIC_NOTICE_BLOB_PREFIX,
+            _generic_notice_blob_prefix(),
             "notice packet",
             "notice%20packet",
             "lucygenericnotices",
             container_name if container_name != "lucycmnotices" else "",
         )
     )
+
+
+def _generic_notice_result_matches_blob(result: Dict[str, Any], blob_name: str) -> bool:
+    expected = str(blob_name or "").lower().lstrip("/")
+    if not expected:
+        return False
+    expected_name = expected.split("/")[-1]
+    values = [
+        str(result.get("metadata_storage_path") or ""),
+        str(result.get("metadata_storage_name") or ""),
+    ]
+    haystack = " ".join(
+        [
+            value.lower()
+            for value in values
+            if value
+        ]
+        + [
+            urllib.parse.unquote(value).lower()
+            for value in values
+            if value
+        ]
+    )
+    return expected in haystack or expected_name in haystack
 
 _HANDOFF_MESSAGE_VARIANTS = [
     "An APEX representative will join this chat within 5 minutes. If a representative is not able to join, please just reply back and I will set up a callback.",
@@ -5080,6 +5475,7 @@ def find_notice_for_user_sync(apex_id: str) -> str:
             generic_member_record: Optional[Dict[str, Any]] = None
             generic_member_context = ""
             generic_case_title = ""
+            generic_case_notice: Optional[Dict[str, str]] = None
 
             def _apply_apex_filter(
                 results: List[Dict[str, Any]],
@@ -5185,13 +5581,34 @@ def find_notice_for_user_sync(apex_id: str) -> str:
                 generic_member_record = _fetch_generic_notice_member_record(apex_id)
                 generic_case_title = _fetch_case_title_for_member(generic_member_record)
                 generic_member_context = build_generic_notice_member_context(generic_member_record)
+                generic_case_id = str((generic_member_record or {}).get("_new_case_value") or "").strip()
+                generic_case_notice = get_case_notice(generic_case_id, generic_case_title)
 
-                if generic_case_title:
-                    generic_queries = [
-                        (GENERIC_NOTICE_BLOB_PREFIX, f'"{generic_case_title}" "{GENERIC_NOTICE_BLOB_PREFIX}"'),
-                        ("case_notice", f'"{generic_case_title}" "notice"'),
-                        ("case_title", generic_case_title),
-                    ]
+                if generic_case_title and generic_case_notice:
+                    notice_file_name = generic_case_notice["blob_name"].split("/")[-1]
+                    generic_queries: List[tuple[str, str]] = []
+                    if generic_case_notice.get("case_lookup_key"):
+                        generic_queries.append(
+                            ("case_notice_key", f'"{generic_case_notice["case_lookup_key"]}"')
+                        )
+                    if generic_case_notice.get("case_slug"):
+                        generic_queries.append(
+                            (
+                                "case_notice_slug",
+                                f'"{generic_case_notice["case_slug"]}" "{_generic_notice_blob_prefix()}"',
+                            )
+                        )
+                    generic_queries.extend(
+                        [
+                            ("case_notice_blob", f'"{notice_file_name}" "{generic_case_title}"'),
+                            (
+                                "case_notice_prefix",
+                                f'"{generic_case_title}" "{_generic_notice_blob_prefix()}"',
+                            ),
+                            ("case_notice", f'"{generic_case_title}" "notice"'),
+                            ("case_title", generic_case_title),
+                        ]
+                    )
                     generic_results: List[Dict[str, Any]] = []
                     for label, query in generic_queries:
                         candidates = _run_search(
@@ -5202,6 +5619,12 @@ def find_notice_for_user_sync(apex_id: str) -> str:
                             top=15,
                         )
                         candidates = [candidate for candidate in candidates if _is_generic_notice_candidate(candidate)]
+                        scoped = [
+                            candidate
+                            for candidate in candidates
+                            if _generic_notice_result_matches_blob(candidate, generic_case_notice["blob_name"])
+                        ]
+                        candidates = scoped
                         if candidates:
                             generic_results = sorted(
                                 candidates,
@@ -5218,6 +5641,23 @@ def find_notice_for_user_sync(apex_id: str) -> str:
                             clean_apex_id,
                             generic_case_title,
                         )
+                    else:
+                        results_list = [
+                            {
+                                "chunk": "",
+                                "metadata_storage_name": generic_case_notice.get("display_name") or generic_case_notice["blob_name"],
+                                "metadata_storage_path": generic_case_notice["blob_url"],
+                                "metadata_storage_file_extension": ".pdf",
+                                "file_extension": ".pdf",
+                            }
+                        ]
+                        generic_fallback_used = True
+                        logger.info(
+                            "[Lucy] Notice lookup source_type=generic_notice_fallback_direct apex_id=%s case=%s blob=%s",
+                            clean_apex_id,
+                            generic_case_title,
+                            generic_case_notice["blob_name"],
+                        )
 
             if not results_list:
                 extended_note = ""
@@ -5227,123 +5667,15 @@ def find_notice_for_user_sync(apex_id: str) -> str:
                         "(this can take up to about 45 seconds).\n\n"
                     )
                 _update_progress("Checking case notice packet...", 75)
-                generic_member_record = _fetch_generic_notice_member_record(apex_id)
-                generic_case_title = _fetch_case_title_for_member(generic_member_record)
-                generic_results: List[Dict[str, Any]] = []
-                if generic_case_title:
-                    generic_queries = [
-                        (f'"{generic_case_title}" "Notice packet"', "generic_notice_case_exact", "all"),
-                        (f"{generic_case_title} notice packet", "generic_notice_case_terms", "any"),
-                        (f"{generic_case_title} notice", "generic_notice_case_notice", "any"),
-                    ]
-                    for generic_query, generic_label, generic_mode in generic_queries:
-                        generic_results = _run_search(
-                            generic_query,
-                            generic_label,
-                            search_fields=["chunk", "metadata_storage_name", "metadata_storage_path"],
-                            search_mode=generic_mode,
-                            top=8,
-                        )
-                        if generic_results:
-                            break
-
-                if generic_results:
-                    generic_results.sort(
-                        key=lambda result: _generic_notice_candidate_score(result, generic_case_title),
-                        reverse=True,
-                    )
-                    doc = generic_results[0]
-                    storage_account = os.getenv("AZURE_STORAGE_ACCOUNT_NAME")
-                    if not storage_account:
-                        logger.error("AZURE_STORAGE_ACCOUNT_NAME not set")
-                        return "ERROR: Storage account not configured"
-                    generic_container_name = (
-                        os.getenv("LUCY_GENERIC_NOTICE_CONTAINER")
-                        or os.getenv("AZURE_GENERIC_NOTICE_CONTAINER")
-                        or GENERIC_NOTICE_CONTAINER
-                    )
-
-                    storage_path = _sanitize_storage_path(doc.get("metadata_storage_path") or "")
-                    storage_name = _sanitize_storage_path(doc.get("metadata_storage_name") or "").lstrip("/")
-                    generic_candidate_paths: List[str] = []
-
-                    if storage_path:
-                        from urllib.parse import urlparse
-
-                        if storage_path.lower().startswith("http"):
-                            parsed = urlparse(storage_path)
-                            cleaned_path = _sanitize_storage_path(parsed.path).lstrip("/")
-                            if cleaned_path and cleaned_path.lower().endswith(".pdf"):
-                                if not cleaned_path.lower().startswith(f"{generic_container_name.lower()}/"):
-                                    cleaned_path = f"{generic_container_name}/{cleaned_path}"
-                                generic_candidate_paths.append(cleaned_path)
-                        elif storage_path.lower().endswith(".pdf"):
-                            cleaned_path = storage_path.lstrip("/")
-                            if not cleaned_path.lower().startswith(f"{generic_container_name.lower()}/"):
-                                cleaned_path = f"{generic_container_name}/{cleaned_path}"
-                            generic_candidate_paths.append(cleaned_path)
-
-                    if storage_name and storage_name.lower().endswith(".pdf"):
-                        candidate = storage_name
-                        if not candidate.lower().startswith(f"{generic_container_name.lower()}/"):
-                            candidate = f"{generic_container_name}/{candidate}"
-                        if candidate not in generic_candidate_paths:
-                            generic_candidate_paths.append(candidate)
-
-                    generic_blob_url = None
-                    for candidate in generic_candidate_paths:
-                        if _looks_like_markdown_path(candidate):
-                            continue
-                        generic_blob_url = f"https://{storage_account}.blob.core.windows.net/{candidate}"
-                        logger.info("[Lucy] Generic notice candidate blob URL: %s", generic_blob_url)
-                        break
-
-                    if generic_blob_url:
-                        generic_sas_url = generate_sas_url(generic_blob_url)
-                        if generic_sas_url and not generic_sas_url.startswith("ERROR"):
-                            generic_pdf_name = (
-                                storage_name.split("/")[-1]
-                                if storage_name and storage_name.lower().endswith(".pdf")
-                                else "Notice packet.pdf"
-                            )
-                            record_notice_pdf(apex_id, generic_sas_url, generic_pdf_name, display="side")
-                            generic_chunks = [
-                                str(result.get("chunk") or "").strip()
-                                for result in generic_results
-                                if str(result.get("chunk") or "").strip()
-                            ]
-                            generic_notice_text = "\n\n".join(generic_chunks)
-                            generic_member_context = build_generic_notice_member_context(generic_member_record)
-                            _update_progress("Done", 100)
-                            return f"""{extended_note}I found the generic notice packet for this case and can use it with your approved member details.
-
-NOTICE_SOURCE_TYPE: generic_notice_fallback
-CASE_NOTICE_SOURCE: Print/Notice packet
-CASE_NAME: {generic_case_title}
-
-📄 **[{generic_pdf_name} - Click to Download]({generic_sas_url})**
-
-**GENERIC NOTICE CONTENT:**
-<NOTICE_CONTENT>
-{generic_notice_text}
-</NOTICE_CONTENT>
-
-**APPROVED MEMBER CONTEXT:**
-{generic_member_context}
-
-Please explain the case notice in plain language using the generic notice content as the grounding source. Use the approved member context only for member-specific details such as estimated amount, class/PAGA counts, and status. Do not imply that an individualized notice PDF was found.
-
-**PDF_DISPLAY_INFO:**
-- PDF_URL: {generic_sas_url}
-- PDF_NAME: {generic_pdf_name}
-- DISPLAY_MODE: side"""
-                        logger.warning("[Lucy] Could not generate SAS for generic notice fallback")
+                if generic_member_record is None:
+                    generic_member_record = _fetch_generic_notice_member_record(apex_id)
+                if not generic_case_title:
+                    generic_case_title = _fetch_case_title_for_member(generic_member_record)
 
                 logger.info(
-                    "[Lucy] Generic notice fallback unavailable for Apex ID %s; case_title=%s results=%s",
+                    "[Lucy] Generic notice fallback unavailable for Apex ID %s; case_title=%s",
                     apex_id,
                     generic_case_title or "<missing>",
-                    len(generic_results),
                 )
                 _update_progress("Done", 100)
                 return (
@@ -5368,11 +5700,18 @@ Please explain the case notice in plain language using the generic notice conten
             if not storage_account:
                 logger.error("AZURE_STORAGE_ACCOUNT_NAME not set")
                 return "ERROR: Storage account not configured"
-            container_name = (
-                os.getenv("AZURE_STORAGE_CONTAINER_NAME")
-                or os.getenv("AZURE_STORAGE_CONTAINER")
-                or "lucyrag"
-            )
+            if generic_fallback_used:
+                container_name = (
+                    os.getenv("LUCY_GENERIC_NOTICE_CONTAINER")
+                    or os.getenv("AZURE_GENERIC_NOTICE_CONTAINER")
+                    or GENERIC_NOTICE_CONTAINER
+                )
+            else:
+                container_name = (
+                    os.getenv("AZURE_STORAGE_CONTAINER_NAME")
+                    or os.getenv("AZURE_STORAGE_CONTAINER")
+                    or "lucyrag"
+                )
 
             storage_path = doc.get("metadata_storage_path") or ""
             storage_path = _sanitize_storage_path(storage_path)
@@ -5398,38 +5737,61 @@ Please explain the case notice in plain language using the generic notice conten
 
             result_paths: List[str] = []
 
-            if storage_name and storage_name.lower().endswith(".pdf") and not _looks_like_markdown_path(storage_name):
+            def _container_path_from_storage_path(path_value: str, expected_container: str) -> str:
+                """Return a container-relative blob path from Search storage metadata."""
+                from urllib.parse import unquote, urlparse
+
+                raw_path = _sanitize_storage_path(path_value or "").lstrip("/")
+                if not raw_path:
+                    return ""
+                if raw_path.lower().startswith("http"):
+                    parsed = urlparse(raw_path)
+                    raw_path = _sanitize_storage_path(unquote(parsed.path)).lstrip("/")
+
+                if not raw_path.lower().endswith(".pdf") or _looks_like_markdown_path(raw_path):
+                    return ""
+
+                parts = raw_path.split("/", 1)
+                if len(parts) == 2 and parts[0].lower() in {"lucycmnotices", "lucyrag"}:
+                    return raw_path
+                if expected_container and not raw_path.lower().startswith(f"{expected_container.lower()}/"):
+                    return f"{expected_container}/{raw_path}"
+                return raw_path
+
+            if storage_path:
+                if storage_path.lower().startswith("http"):
+                    cleaned_path = _container_path_from_storage_path(storage_path, container_name)
+                    if cleaned_path and cleaned_path not in result_paths:
+                        result_paths.append(cleaned_path)
+                else:
+                    raw_path = _container_path_from_storage_path(storage_path, container_name)
+                    if raw_path and raw_path not in result_paths:
+                        result_paths.append(raw_path)
+
+            if (
+                storage_name
+                and not generic_fallback_used
+                and storage_name.lower().endswith(".pdf")
+                and not _looks_like_markdown_path(storage_name)
+            ):
                 candidate = storage_name
                 if not candidate.lower().startswith(f"{container_name.lower()}/"):
                     candidate = f"{container_name}/{candidate}"
                 if candidate not in result_paths:
                     result_paths.append(candidate)
 
-            if storage_path:
-                from urllib.parse import urlparse
-
-                if storage_path.lower().startswith("http"):
-                    parsed = urlparse(storage_path)
-                    cleaned_path = _sanitize_storage_path(parsed.path).lstrip("/")
-                    if cleaned_path and cleaned_path.lower().endswith(".pdf") and not _looks_like_markdown_path(cleaned_path):
-                        if not cleaned_path.lower().startswith(f"{container_name.lower()}/"):
-                            cleaned_path = f"{container_name}/{cleaned_path}"
-                        if cleaned_path not in result_paths:
-                            result_paths.append(cleaned_path)
-                else:
-                    raw_path = storage_path.lstrip("/")
-                    if raw_path and raw_path.lower().endswith(".pdf") and not _looks_like_markdown_path(raw_path):
-                        if not raw_path.lower().startswith(f"{container_name.lower()}/"):
-                            raw_path = f"{container_name}/{raw_path}"
-                        if raw_path not in result_paths:
-                            result_paths.append(raw_path)
-
             # Build candidate paths, preferring result paths when ApexID doesn't match
             candidate_paths: List[str] = []
             if prefer_result_path:
                 candidate_paths.extend(result_paths)
-            if clean_apex_id:
-                candidate_paths.append(f"{container_name}/{clean_apex_id}.pdf")
+            if clean_apex_id and not generic_fallback_used:
+                default_container_name = container_name
+                for result_path in result_paths:
+                    result_container = result_path.split("/", 1)[0].lower()
+                    if result_container in {"lucycmnotices", "lucyrag"}:
+                        default_container_name = result_path.split("/", 1)[0]
+                        break
+                candidate_paths.append(f"{default_container_name}/{clean_apex_id}.pdf")
             if not prefer_result_path:
                 for candidate in result_paths:
                     if candidate not in candidate_paths:
@@ -5472,6 +5834,8 @@ Please explain the case notice in plain language using the generic notice conten
                 display_path = display_path.lstrip("/")
                 if display_path.lower().endswith(".pdf") and not _looks_like_markdown_path(display_path):
                     pdf_display_name = display_path.split("/")[-1]
+            if generic_fallback_used and generic_case_notice and generic_case_notice.get("display_name"):
+                pdf_display_name = generic_case_notice["display_name"]
 
             record_notice_pdf(apex_id, sas_url, pdf_display_name, display="side")
 

@@ -55,9 +55,7 @@ LUCY_CONTACT_FIELDS = (
 LUCY_SETTLEMENT_FIELDS = (
     "new_estimatedsettlementamount",
     "new_classworkweeks",
-    "cr7fe_classcountmetric",
     "new_pagaweeks",
-    "cr7fe_pagacountmetric",
 )
 
 LUCY_EMPLOYMENT_FIELDS = (
@@ -70,7 +68,7 @@ LUCY_EMPLOYMENT_FIELDS = (
 )
 
 LUCY_POTENTIAL_MEMBER_STATUS_FIELDS = (
-    "new_projectcoordinator",
+    "_new_projectcoordinator_value",
     "new_potentialclassmemberstatus",
     "new_counseloutreachdate",
     "new_followupdate1",
@@ -78,6 +76,24 @@ LUCY_POTENTIAL_MEMBER_STATUS_FIELDS = (
     "new_followupdate3",
     "new_followupdate4",
 )
+
+NOTICE_TEMPLATE_SCHEMA_MAP = {
+    "estimated_settlement_amount": {
+        "d365_entity": CLASS_MEMBER_ENTITY_SET,
+        "d365_field": "new_estimatedsettlementamount",
+        "label": "Estimated settlement amount",
+    },
+    "class_count": {
+        "d365_entity": CLASS_MEMBER_ENTITY_SET,
+        "d365_field": "new_classworkweeks",
+        "label": "Class count",
+    },
+    "paga_count": {
+        "d365_entity": CLASS_MEMBER_ENTITY_SET,
+        "d365_field": "new_pagaweeks",
+        "label": "PAGA count",
+    },
+}
 
 LUCY_MEMBER_DISBURSEMENT_FIELDS = (
     "new_checkamount",

@@ -8,6 +8,7 @@ sync.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import io
 import json
 import logging
@@ -33,6 +34,30 @@ DEFAULT_DESTINATION_CONTAINER = "lucycmnotices"
 DEFAULT_BLOB_PREFIX = "generic-notices"
 DEFAULT_LEDGER_BLOB = "_sync/generic_notice_ledger.json"
 EXCLUDED_SOURCE_NAME_TERMS = ("mail merge", "for merge", "with ssn", "ssn")
+GENERIC_NOTICE_TRAILING_TERMS = (
+    "class",
+    "copy",
+    "draft",
+    "en",
+    "english",
+    "es",
+    "final",
+    "form",
+    "mailing",
+    "merge",
+    "notice",
+    "packet",
+    "pdf",
+    "redacted",
+    "remail",
+    "revised",
+    "revision",
+    "settlement",
+    "short",
+    "spanish",
+    "version",
+    "working",
+)
 
 
 @dataclass(frozen=True)
@@ -71,6 +96,16 @@ def slugify_case_name(case_name: str) -> str:
     return slug or "unknown-case"
 
 
+def case_identity_key(case_name: str, *, source_item_id: str | None = None) -> str:
+    normalized = unicodedata.normalize(
+        "NFKD",
+        f"{str(case_name or '').strip()}|{str(source_item_id or '').strip()}",
+    )
+    ascii_value = normalized.encode("ascii", "ignore").decode("ascii")
+    cleaned = " ".join(ascii_value.lower().split())
+    return hashlib.sha1(cleaned.encode("utf-8")).hexdigest()[:8]
+
+
 def normalize_drive_relative_path(path: str, drive_name: str = DEFAULT_DRIVE_NAME) -> str:
     cleaned = (path or "").strip().strip("/")
     drive_aliases = {
@@ -100,10 +135,24 @@ def destination_pdf_name(file_name: str) -> str:
     return f"{stem or 'Notice Packet'}.pdf"
 
 
-def build_destination_blob_name(case_name: str, file_name: str, prefix: str = DEFAULT_BLOB_PREFIX) -> str:
-    safe_file = re.sub(r"[/\\]+", "-", destination_pdf_name(file_name))
+def generic_notice_case_key(case_name: str, *, source_item_id: str | None = None) -> str:
+    return f"{slugify_case_name(case_name)}--{case_identity_key(case_name, source_item_id=source_item_id)}"
+
+
+def generic_notice_rag_key(case_name: str, *, source_item_id: str | None = None) -> str:
+    return generic_notice_case_key(case_name, source_item_id=source_item_id)
+
+
+def build_destination_blob_name(
+    case_name: str,
+    file_name: str,
+    prefix: str = DEFAULT_BLOB_PREFIX,
+    *,
+    source_item_id: str | None = None,
+) -> str:
     prefix = (prefix or "").strip("/")
-    parts = [part for part in (prefix, slugify_case_name(case_name), safe_file) if part]
+    flat_file = f"{generic_notice_case_key(case_name, source_item_id=source_item_id)}--generic-notice.pdf"
+    parts = [part for part in (prefix, flat_file) if part]
     return "/".join(parts)
 
 
@@ -217,7 +266,7 @@ def list_notice_pdfs(
     notice_items = [
         item
         for item in children
-        if "file" in item and _is_supported_notice_source_file(str(item.get("name", "")))
+        if "file" in item and _is_case_level_notice_source_file(str(item.get("name", "")))
     ]
     if notice_items:
         return [_select_best_notice_source(notice_items)]
@@ -247,11 +296,76 @@ def _is_supported_notice_source_file(file_name: str) -> bool:
     return lowered.endswith((".pdf", ".doc", ".docx"))
 
 
+def _is_case_level_notice_source_file(file_name: str) -> bool:
+    if not _is_supported_notice_source_file(file_name):
+        return False
+    return not _looks_like_member_specific_notice_name(file_name)
+
+
 def _is_notice_packet_file(file_name: str) -> bool:
     lowered = file_name.lower()
-    if not _is_supported_notice_source_file(lowered):
+    if not _is_case_level_notice_source_file(file_name):
         return False
-    return "notice" in lowered and ("packet" in lowered or "class notice" in lowered)
+    return "notice" in lowered
+
+
+def _is_person_name_fragment(value: str) -> bool:
+    fragment = (value or "").strip(" '\"")
+    if not fragment or re.search(r"\d", fragment):
+        return False
+    lowered = fragment.lower()
+    business_terms = {
+        "agency",
+        "authority",
+        "case",
+        "center",
+        "company",
+        "contractors",
+        "corp",
+        "corporation",
+        "group",
+        "health",
+        "hospital",
+        "inc",
+        "llc",
+        "lp",
+        "ltd",
+        "management",
+        "medical",
+        "services",
+        "systems",
+    }
+    if any(term in lowered.split() for term in business_terms):
+        return False
+    words = re.findall(r"[A-Za-z][A-Za-z']+", fragment)
+    if len(words) < 2 or len(words) > 4:
+        return False
+    lowered_words = {word.lower() for word in words}
+    if lowered_words.intersection(GENERIC_NOTICE_TRAILING_TERMS):
+        return False
+    short_words = {"a", "d", "de", "del", "di", "la", "le", "van", "von"}
+    return all(
+        word.lower() in short_words or (word[0].isupper() and not word.isupper())
+        for word in words
+    )
+
+
+def _looks_like_member_specific_notice_name(file_name: str) -> bool:
+    stem = re.sub(r"\.[^.]+$", "", (file_name or "").strip())
+    parts = [part.strip(" '\"") for part in re.split(r"\s[-–—]\s", stem) if part.strip()]
+    if len(parts) < 2:
+        return False
+
+    if _is_person_name_fragment(parts[-1]):
+        return True
+    first_words = re.findall(r"[A-Za-z]+", parts[0])
+    has_middle_initial = bool(re.search(r"\b[A-Z]\b", parts[0]))
+    strong_leading_name = len(first_words) >= 3 or has_middle_initial
+    return (
+        "notice" in " ".join(parts[1:]).lower()
+        and strong_leading_name
+        and _is_person_name_fragment(parts[0])
+    )
 
 
 def _notice_source_score(item: dict[str, Any]) -> tuple[int, str]:
@@ -270,6 +384,8 @@ def _notice_source_score(item: dict[str, Any]) -> tuple[int, str]:
         score += 25
     if any(term in lowered for term in EXCLUDED_SOURCE_NAME_TERMS):
         score -= 1000
+    if _looks_like_member_specific_notice_name(name):
+        score -= 500
     if "copy" in lowered:
         score -= 20
     if "old" in lowered or "draft" in lowered:
@@ -331,6 +447,40 @@ def save_ledger(container_client, ledger_blob: str, ledger: dict[str, Any]) -> N
     )
 
 
+def _generic_notice_projection_blob(name: str, prefix: str) -> bool:
+    normalized_prefix = (prefix or "").strip("/")
+    normalized = (name or "").strip("/")
+    if normalized_prefix:
+        return normalized.startswith(f"{normalized_prefix}/") and len(normalized) > len(normalized_prefix) + 1
+    return bool(normalized)
+
+
+def prune_stale_generic_notice_blobs(
+    container_client,
+    *,
+    prefix: str,
+    active_blob_names: set[str],
+    files_ledger: dict[str, Any],
+    dry_run: bool,
+) -> int:
+    """Remove stale flat generic notice blobs from prior selector versions."""
+    if not active_blob_names:
+        return 0
+
+    stale = []
+    for blob in container_client.list_blobs(name_starts_with=(prefix or "").strip("/")):
+        name = str(getattr(blob, "name", "") or blob.get("name", ""))
+        if _generic_notice_projection_blob(name, prefix) and name not in active_blob_names:
+            stale.append(name)
+
+    for name in stale:
+        LOG.info("Deleting stale generic notice blob=%s", name)
+        if not dry_run:
+            container_client.delete_blob(name)
+        files_ledger.pop(name, None)
+    return len(stale)
+
+
 def sync_generic_notices(
     *,
     graph: GraphClient,
@@ -360,7 +510,9 @@ def sync_generic_notices(
         "skipped": 0,
         "failed": 0,
         "missing_notice_packet": 0,
+        "stale_deleted": 0,
     }
+    active_blob_names: set[str] = set()
     for case_folder in case_folders:
         case_name = str(case_folder.get("name") or "").strip()
         if not case_name:
@@ -372,7 +524,16 @@ def sync_generic_notices(
             continue
         for item in sorted(pdfs, key=lambda value: str(value.get("name", "")).lower()):
             stats["pdfs_seen"] += 1
-            blob_name = build_destination_blob_name(case_name, str(item.get("name", "")), config.destination_prefix)
+            case_folder_id = str(case_folder.get("id") or "")
+            source_item_id = str(item.get("id") or "")
+            identity_source = case_folder_id or source_item_id
+            blob_name = build_destination_blob_name(
+                case_name,
+                str(item.get("name", "")),
+                config.destination_prefix,
+                source_item_id=identity_source,
+            )
+            active_blob_names.add(blob_name)
             ledger_entry = files_ledger.get(blob_name)
             if not should_upload(item, ledger_entry):
                 stats["skipped"] += 1
@@ -394,7 +555,14 @@ def sync_generic_notices(
                         metadata={
                             "notice_source_type": "generic_notice",
                             "case_name": blob_metadata_value(case_name),
+                            "case_slug": blob_metadata_value(slugify_case_name(case_name)),
+                            "case_key": blob_metadata_value(
+                                case_identity_key(case_name, source_item_id=identity_source)
+                            ),
+                            "original_file_name": blob_metadata_value(destination_pdf_name(source_name)),
+                            "source_file_name": blob_metadata_value(source_name),
                             "sharepoint_item_id": blob_metadata_value(item.get("id", "")),
+                            "sharepoint_case_folder_id": blob_metadata_value(case_folder_id),
                         },
                     )
                 except requests.RequestException as exc:
@@ -411,11 +579,21 @@ def sync_generic_notices(
                 "source": item_fingerprint(item),
                 "case_name": case_name,
                 "file_name": item.get("name"),
+                "sharepoint_item_id": source_item_id,
+                "sharepoint_case_folder_id": case_folder_id,
                 "synced_at": datetime.now(timezone.utc).isoformat(),
             }
             stats["uploaded"] += 1
 
     if not config.dry_run:
+        if stats["cases_seen"] > 0 and stats["pdfs_seen"] > 0:
+            stats["stale_deleted"] = prune_stale_generic_notice_blobs(
+                container_client,
+                prefix=config.destination_prefix,
+                active_blob_names=active_blob_names,
+                files_ledger=files_ledger,
+                dry_run=config.dry_run,
+            )
         save_ledger(container_client, config.ledger_blob, ledger)
     return stats
 

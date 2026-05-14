@@ -13,8 +13,8 @@ Lucy should use a tiered notice retrieval strategy:
    enrich the answer with allowed member-specific Dynamics fields.
 
 This preserves the value of the existing individualized notice corpus while
-providing a deterministic fallback path for cases where a member-specific notice
-cannot be found.
+providing a targeted generic fallback path for cases where a member-specific
+notice cannot be found.
 
 ## Business Rationale
 
@@ -52,7 +52,8 @@ When a class member asks Lucy to explain their notice, case, or status:
 ## Generic Notice Fallback Mode
 
 - Use the generic notice at `case_root/Print/Notice packet`.
-- If multiple notice PDFs exist, select deterministically:
+- If multiple notice PDFs exist in the source folder, select one stable generic
+  source:
   - prefer a configured naming match when available,
   - otherwise use the first valid notice PDF by configured pattern.
 - Explain the case/notice in simple language.
@@ -75,9 +76,17 @@ When a class member asks Lucy to explain their notice, case, or status:
   `/Shared Documents/Active Cases/Settlements/{case}/Print/Notice packet`.
 - Copy PDFs only.
 - Do not copy the old per-member `Print/Mail Merged` PDFs.
-- Default destination is `lucycmnotices/generic-notices/{case-slug}/{pdf}`
-  because the current `lucy-notices-v2` Azure AI Search indexers already watch
-  `lucycmnotices` hourly.
+- Default destination is the single flat prefix
+  `lucycmnotices/generic-notices/{case-slug}--{case-key}--{pdf}` because the
+  current `lucy-notices-v2` Azure AI Search path watches `lucycmnotices` and
+  should discover copied PDFs without changing Lucy's member-notice RAG
+  pipeline.
+- Do not create one virtual blob subfolder per case for the new projection.
+  Keep generic templates in one targeted `generic-notices/` PDF corpus so
+  Lucy can search only that small prefix when individualized lookup misses.
+- Source path is `{case}/Print/Notice packet`. Historical cases that have not
+  yet been moved into that standardized folder may fall back to a non-mail-merge
+  notice file directly under `{case}/Print`.
 - Keep a sync ledger keyed by destination blob and SharePoint item fingerprint
   (`id`, tags, size, modified time, and hashes when present) so unchanged
   notices are skipped and updated PDFs are overwritten.

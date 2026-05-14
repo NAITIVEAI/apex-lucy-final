@@ -31,6 +31,20 @@ class TestNoticeToolInstructions(unittest.TestCase):
         self.assertIn("get_case_details_sync(case_id)", text)
         self.assertIn("do not repeat `find_notice_for_user_sync`", text)
 
+    def test_generic_notice_fallback_is_spelled_out_play_by_play(self) -> None:
+        instructions_path = (
+            Path(__file__).resolve().parents[1] / "app" / "agent_instructions.txt"
+        )
+        text = instructions_path.read_text()
+
+        self.assertIn("single flat folder/prefix `lucycmnotices/generic-notices/", text)
+        self.assertIn("search only the West generic notice folder/prefix corpus", text)
+        self.assertIn("Apex prints the Apex ID on those individualized mailed PDFs", text)
+        self.assertIn("Do not expect the Apex ID to appear in a generic case notice", text)
+        self.assertIn("it is the notice for that case, just with member-specific fields filled from Dynamics", text)
+        self.assertIn("How much is my check?", text)
+        self.assertIn("Never imply that the generic PDF contains member-specific values", text)
+
 
 if __name__ == "__main__":
     unittest.main()

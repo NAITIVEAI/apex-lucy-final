@@ -2373,6 +2373,732 @@ Follow-up:
 
 ---
 
+### Notice Architecture Remediation + Generic Notice Verification — COMPLETED 2026-05-12
+
+**Plan/context:** Active plan remains
+`001-lucy-foundry-hosted-agent-migration.md`; this run corrected the notice
+architecture implementation so Lucy preserves the West-primary 1M member-notice
+RAG path, uses generic case notices only as deterministic fallback templates,
+and does not introduce East-primary or per-blob-trigger indexing assumptions.
+
+**Status:** completed. Live generic notices under the existing
+`generic-notices/...` convention are searchable through `lucy-notices-v2`, and
+Lucy now has a direct keyed case-notice fetch path that does not depend on
+Search discovery.
+
+**Summary:**
+- Read `AGENTS.md`, this ledger, `TASKS.md`, `graphify-out/GRAPH_REPORT.md`,
+  and the active plan only.
+- Live Dataverse screen was checked first. The source of truth remains the
+  `new_classmember` main `systemform` named `Information`, form id
+  `05e90c7f-deeb-4e50-b9c0-f7bf207bb3a2`, tab `Lucy Class Member Data`.
+  The live form was published `2026-05-11T19:01:19Z`, version `127064761`,
+  so it is newer than the provided screenshot.
+- The live form field set includes COA reason and normalized count metrics:
+  `new_apexid`, `new_fullname`, `new_firstname`, `new_lastname`,
+  `new_shortsocial`, `new_coareason`, address/contact/PIN/employee/site fields,
+  `new_estimatedsettlementamount`, `new_classworkweeks`,
+  `cr7fe_classcountmetric`, `new_pagaweeks`, `cr7fe_pagacountmetric`,
+  employment fields, and the Lucy potential-member status/follow-up fields.
+  `agent/app/lucy_field_policy.py` now records the complete live field set and
+  a notice-template schema map for the D365 fields Lucy may use to fill generic
+  template gaps.
+- Confirmed the live generic notice sync job is `lucy-generic-notice-sync` in
+  West US, writing to `AZURE_STORAGE_ACCOUNT_NAME=aiagentlucyapex01`,
+  `AZURE_GENERIC_NOTICE_CONTAINER=lucycmnotices`, and
+  `GENERIC_NOTICE_BLOB_PREFIX=generic-notices`.
+- Confirmed the member-facing ACA runs in East US 2 but points at the West
+  source data: `AZURE_STORAGE_ACCOUNT_NAME=aiagentlucyapex01`,
+  `AZURE_STORAGE_CONTAINER_NAME=lucyrag`,
+  `AZURE_SEARCH_ENDPOINT=https://ailucyaisearch.search.windows.net`, and
+  `AZURE_SEARCH_INDEX_NAME=lucy-notices-v2`.
+- Removed the erroneous repo drift that changed generic notices to
+  `gp/generic-notices`; the repo again matches the running West sync job and
+  `state/notice-retrieval-strategy.md`.
+- Added `get_case_notice(case_id, case_title=None)` in
+  `agent/app/user_functions.py`. It resolves the generic notice from West
+  storage by case ID/title via
+  `lucycmnotices/generic-notices/{case-slug}/{pdf}` and returns the selected
+  PDF URL/metadata without relying on Search to discover the document.
+- Kept the existing 1M member-notice retrieval order untouched: Apex ID
+  filename, OCR/content, Apex ID + name, extended member profile search, then
+  generic fallback only after individualized lookup misses.
+- Scoped generic fallback RAG to the fetched case notice when indexed chunks are
+  present, and falls back to the directly fetched PDF plus approved Dynamics
+  member context when Search discovery is unavailable.
+- Updated Lucy's system prompt to state the two-layer notice architecture, West
+  authority, East mirror/runtime role, Responses API/Foundry v2 runtime, and
+  generic notice gap-fill rules.
+
+**Files changed:**
+- `agent/generic_notice_sync/sync.py`
+- `agent/generic_notice_sync/README.md`
+- `agent/app/.env.example`
+- `agent/app/user_functions.py`
+- `agent/app/lucy_field_policy.py`
+- `agent/app/agent_instructions.txt`
+- `agent/tests/test_generic_notice_sync.py`
+- `agent/tests/test_generic_notice_fallback.py`
+- `agent/tests/test_lucy_field_policy.py`
+- `state/refactor-ledger.md`
+- `graphify-out/GRAPH_REPORT.md`, `graphify-out/graph.json`,
+  `graphify-out/graph.html`
+
+**Research / live evidence used:**
+- Live storage account inspection:
+  - `aiagentlucyapex01` is in `westus`.
+- Live Azure Search inspection:
+  - `ailucyaisearch` is in `West US`.
+- Live blob inspection confirmed existing copied blobs under
+  `generic-notices/...`, for example
+  `generic-notices/360-health-plan-inc/360 Health Plan Inc - Notice Packet.pdf`.
+- Live Azure Search query against `lucy-notices-v2` for
+  `360 Health Plan Inc Notice Packet` returned five chunks for
+  `https://aiagentlucyapex01.blob.core.windows.net/lucycmnotices/generic-notices/360-health-plan-inc/360%20Health%20Plan%20Inc%20-%20Notice%20Packet.pdf`.
+- Live Azure Search query against `lucy-notices-v2` for `generic-notices`
+  returned generic notice paths including ONR, Driscoll's, Stars Intervention,
+  Wawanesa, and ZVLA.
+- Live Dataverse metadata query against
+  `https://apexclassaction.crm.dynamics.com/api/data/v9.2/systemforms(...)`
+  confirmed the form identity, published timestamp, tab, sections, fields, and
+  disbursement subgrid relationship
+  `new_new_classmember_new_memberdisbursement_ClassMember`.
+
+**Tests / validation run:**
+- `pytest agent/tests/test_generic_notice_sync.py agent/tests/test_generic_notice_fallback.py agent/tests/test_lucy_field_policy.py agent/tests/test_notice_tool_instructions.py`
+  - Result: `20 passed`.
+- `python3 -m compileall -q agent/app/user_functions.py agent/app/lucy_field_policy.py agent/generic_notice_sync`
+  - Result: passed.
+- `az storage blob list --account-name aiagentlucyapex01 --container-name lucycmnotices --prefix 'generic-notices/360-health-plan-inc/'`
+  - Result: one PDF exists at
+    `generic-notices/360-health-plan-inc/360 Health Plan Inc - Notice Packet.pdf`.
+- Live `curl` to `lucy-notices-v2/docs/search` with search text
+  `360 Health Plan Inc Notice Packet`
+  - Result: returned indexed generic notice chunks for the matching
+    `generic-notices/360-health-plan-inc/...` PDF.
+- `graphify update .`
+  - Result: graph rebuilt to `2560` nodes, `3896` edges, `263` communities.
+
+**Results:**
+- The repo no longer proposes or depends on `gp/generic-notices`.
+- The running generic notice sync job and repo defaults both use
+  `generic-notices`.
+- Live `lucy-notices-v2` can retrieve existing generic notice chunks from the
+  `generic-notices/...` path Lucy uses.
+- Lucy can now direct-fetch the generic case PDF from West storage by case
+  title/case ID before using Search chunks for explanation.
+- The D365 field map is explicit and tied to the live Lucy Class Member Data
+  form field set.
+
+**Follow-ups:**
+- Run a full Hosted/Chainlit canary with a known Apex ID whose individualized
+  notice lookup misses and whose case has a generic notice, then confirm PDF
+  drawer + generic RAG chunks + approved Dynamics member context in one live
+  conversation.
+
+---
+
+### Global Generic Notice Fallback + Copy Job Selector Hotfix — COMPLETED 2026-05-13
+
+**Plan/context:** Active plan remains
+`001-lucy-foundry-hosted-agent-migration.md`. This run followed up on the
+live Lucy screenshot where Apex ID `AALG003` missed the individualized notice
+and still did not open the generic notice fallback. `AALG003` was the canary;
+the bug was global to any legacy case whose valid source notice lived directly
+under `Print` with a plain notice filename instead of the newer
+`Print/Notice packet` subfolder shape.
+
+**Status:** completed and deployed. Lucy's member-facing ACA now runs the
+generic fallback code, the West generic notice copy job image is updated with
+the relaxed global legacy selector, and the AALG003 Allergy notice is present
+and searchable in `lucy-notices-v2`.
+
+**Summary:**
+- Confirmed the live member-facing ACA was still on the older image
+  `agentlucyacreus2.azurecr.io/agent-lucy-eus2:main-ed5d2a2-20260507063412`,
+  so the previous local direct `get_case_notice` work was not yet in the
+  runtime serving Lucy.
+- Live Dynamics lookup for `AALG003` resolved to case id
+  `e6abebab-48f0-ee11-904b-7c1e520b3f99` and title
+  `Paris v. Allergy & Asthma Medical Group of the Bay Area, Inc.`.
+- Live SharePoint source inspection found the historical case folder at
+  `Active Cases/Settlements/Allergy And Asthma/Print`. The new canonical
+  `Print/Notice packet` subfolder was not present for this legacy case, but
+  the likely generic source was directly under `Print` as
+  `Allergy - Notice v2.docx`.
+- The copy job selector was too strict globally for legacy direct-`Print`
+  notices. It only accepted names like notice-packet/class-notice variants
+  after falling back to `Print`, so files such as `Allergy - Notice v2.docx`
+  were skipped even though they are valid non-mail-merge notice sources.
+- Kept `Print/Notice packet` as the primary source contract. For any
+  historical case where that folder is not present yet, the sync job now
+  accepts a supported direct-`Print` file whose name contains `notice`, while
+  still rejecting mail-merge and SSN artifacts.
+- Extended Lucy's direct generic lookup so a D365 title like
+  `Paris v. Allergy & Asthma Medical Group of the Bay Area, Inc.` tries
+  defendant-side and short ampersand-expanded aliases, including
+  `generic-notices/allergy-and-asthma/`.
+- Tightened generic Search fallback so Lucy only RAGs over the direct case
+  blob selected by `get_case_notice`. If the direct case blob is absent, she
+  does not broad-search `generic-notices` and accidentally attach an unrelated
+  case notice.
+
+**Files changed:**
+- `agent/app/user_functions.py`
+- `agent/generic_notice_sync/sync.py`
+- `agent/generic_notice_sync/README.md`
+- `agent/tests/test_generic_notice_fallback.py`
+- `agent/tests/test_generic_notice_sync.py`
+- `state/notice-retrieval-strategy.md`
+- `state/refactor-ledger.md`
+
+**Live vectorizer / indexing evidence:**
+- The existing 1M individualized notice path is still vectorized. Live indexer
+  `lucy-notices-v2-indexer` targets `lucy-notices-v2` through
+  `lucy-notices-v2-skillset`, whose skills remain OCR, merge, split, and
+  `#Microsoft.Skills.Text.AzureOpenAIEmbeddingSkill`.
+- The generic notice path is also vectorized. Live indexer
+  `lucy-notices-v2-indexer-generic-notices` targets the same
+  `lucy-notices-v2` index, runs hourly, and uses
+  `lucy-notices-v2-skillset-generic-notices`, whose skills are split plus
+  `#Microsoft.Skills.Text.AzureOpenAIEmbeddingSkill`.
+- Manually projected the legacy source document to West storage as
+  `lucycmnotices/generic-notices/allergy-and-asthma/Allergy - Notice v2.pdf`.
+- Manually ran `lucy-notices-v2-indexer-generic-notices`; last result was
+  `success`, `itemsProcessed=1`, `itemsFailed=0`, start
+  `2026-05-13T17:14:08.493Z`, end `2026-05-13T17:14:11.969Z`.
+- Live Azure Search query for `Allergy Notice v2` returned indexed chunks for
+  `https://aiagentlucyapex01.blob.core.windows.net/lucycmnotices/generic-notices/allergy-and-asthma/Allergy%20-%20Notice%20v2.pdf`.
+
+**Deployment evidence:**
+- Built and pushed member-facing ACA image:
+  `agentlucyacreus2.azurecr.io/agent-lucy-eus2:codex-generic-fallback-69dc0a3-2026051310`
+  with digest
+  `sha256:dbc7eb5773e94388349f8a4d4d304e5982e929b5abead6d9db7663a98e1a3f97`.
+- Updated `agent-lucy-eus2` to that image. Revision
+  `agent-lucy-eus2--0000072` became `Running`, `Healthy`, and has
+  `trafficWeight=100`.
+- Built and pushed West generic notice sync image:
+  `acrapexintegrationprod.azurecr.io/generic-notice-sync:generic-notice-sync-69dc0a3-2026051310`
+  with digest
+  `sha256:c553e31530dd94408230fe130c2ac0b272ccb5c38fc0eee42840fd92d1b9c33c`.
+- Updated live Container App Job `lucy-generic-notice-sync` in West US to that
+  image. The job is `Ready`, `provisioningState=Succeeded`, and still has
+  `GENERIC_NOTICE_SUBPATH=Print/Notice packet` and
+  `GENERIC_NOTICE_BLOB_PREFIX=generic-notices`.
+
+**Tests / validation run:**
+- `pytest agent/tests/test_generic_notice_sync.py agent/tests/test_generic_notice_fallback.py agent/tests/test_lucy_field_policy.py agent/tests/test_notice_tool_instructions.py agent/tests/test_lucy_responses_loop.py agent/tests/test_lucy_runtime.py`
+  - Result: `68 passed`.
+- `python3 -m compileall -q agent/app/user_functions.py agent/app/lucy_field_policy.py agent/generic_notice_sync`
+  - Result: passed.
+- `curl https://agent-lucy-eus2.purpleocean-f3514433.eastus2.azurecontainerapps.io/health`
+  - Result: HTTP `200`.
+
+**Results:**
+- The vectorizers are still present for both the legacy individualized corpus
+  and the generic notice corpus.
+- The actual scheduled West copy job is now modified globally, not only the
+  local repo and not only AALG003.
+- AALG003's legacy Allergy generic notice is now in the West copied/indexed
+  projection that Lucy can resolve through `generic-notices/allergy-and-asthma/`.
+- Lucy should now use the generic case notice instead of apologizing when an
+  individualized AALG003 notice is not found.
+
+**Follow-ups:**
+- Run a fresh browser conversation for `AALG003` and confirm the generic PDF
+  opens in the side drawer while the chat response uses only approved Dynamics
+  fields for member-specific values.
+
+---
+
+### Generic Notice Runtime Regression Rollback + Schema Hotfix — COMPLETED 2026-05-13
+
+**Plan/context:** Active plan remains
+`001-lucy-foundry-hosted-agent-migration.md`. This run responded to the live
+report that Lucy was no longer retrieving notices after revision `0000072`.
+
+**Status:** completed and redeployed. The broken member-facing image was rolled
+back first, then a narrower hotfix was deployed as revision
+`agent-lucy-eus2--0000074`.
+
+**Summary:**
+- Rolled `agent-lucy-eus2` back from
+  `agentlucyacreus2.azurecr.io/agent-lucy-eus2:codex-generic-fallback-69dc0a3-2026051310`
+  to the previous known image
+  `agentlucyacreus2.azurecr.io/agent-lucy-eus2:main-ed5d2a2-20260507063412`
+  while investigating the regression.
+- Live logs on revision `0000072` showed Azure Search requests returning HTTP
+  `200`, but generic fallback could not load member/case context because the
+  expanded D365 `$select` failed with HTTP `400`.
+- Live D365 confirmed the concrete mismatch:
+  `new_projectcoordinator` is a form lookup name, but the Web API select field
+  is `_new_projectcoordinator_value`. The broader issue was using visual/form
+  fields and non-class-member fields as unconditional class-member `$select`
+  columns in the generic fallback path.
+- Treated the user-provided class-member schema list as the runtime contract
+  for notice fallback. Generic fallback now selects only the class-member
+  schema fields it actually needs: auth/name/address fields, case id, estimated
+  settlement amount, class workweeks, and PAGA weeks.
+- Kept individualized notice search Apex-ID-first. The unique notice path still
+  searches filename/OCR/content using Apex ID, then member name/address only as
+  secondary signals, because Apex ID is printed on the individualized PDFs.
+- Live D365 trace for `AALG003` with the narrowed schema returned the member,
+  case id `e6abebab-48f0-ee11-904b-7c1e520b3f99`, and case title
+  `Paris v. Allergy & Asthma Medical Group of the Bay Area, Inc.` without a
+  400 error.
+- Confirmed the West generic blob exists at
+  `generic-notices/allergy-and-asthma/Allergy - Notice v2.pdf`, and
+  `lucy-notices-v2` returns indexed chunks for `Allergy Notice v2`.
+
+**Files changed:**
+- `agent/app/lucy_field_policy.py`
+- `agent/app/user_functions.py`
+- `agent/tests/test_generic_notice_fallback.py`
+- `agent/tests/test_lucy_field_policy.py`
+- `state/refactor-ledger.md`
+
+**Deployment evidence:**
+- Built and pushed member-facing ACA hotfix image:
+  `agentlucyacreus2.azurecr.io/agent-lucy-eus2:codex-generic-fallback-hotfix-69dc0a3-2026051312`
+  with digest
+  `sha256:3097ede8d2894a8de8249fd0fe7a3b826fd78382bb75e531ba88e47c3bf9f0cb`.
+- Updated `agent-lucy-eus2` to that image. Revision
+  `agent-lucy-eus2--0000074` is `Running`, `Healthy`, and has
+  `trafficWeight=100`.
+- Fresh `curl` to
+  `https://agent-lucy-eus2.purpleocean-f3514433.eastus2.azurecontainerapps.io/health`
+  returned HTTP `200`.
+- Fresh logs connected to revision `agent-lucy-eus2--0000074`; no new
+  `400 Client Error` / `new_projectcoordinator` signature appeared in the
+  sampled hotfix logs.
+
+**Tests / validation run:**
+- `pytest agent/tests/test_generic_notice_fallback.py agent/tests/test_lucy_field_policy.py agent/tests/test_notice_tool_instructions.py agent/tests/test_generic_notice_sync.py agent/tests/test_lucy_responses_loop.py agent/tests/test_lucy_runtime.py`
+  - Result: `69 passed`.
+- `python3 -m compileall -q agent/app/user_functions.py agent/app/lucy_field_policy.py agent/generic_notice_sync`
+  - Result: passed.
+- Live D365 query for `AALG003` using the narrowed schema fields:
+  - Result: no error; returned member, address/name fields, `_new_case_value`,
+    `new_estimatedsettlementamount`, `new_classworkweeks`, and
+    `new_pagaweeks`.
+- Live Search query for `Allergy Notice v2`:
+  - Result: returned indexed chunks for
+    `generic-notices/allergy-and-asthma/Allergy - Notice v2.pdf`.
+- `graphify update .`
+  - Result: graph rebuilt to `2670` nodes, `4025` edges, `260` communities.
+
+**Results:**
+- Production is no longer on the bad `0000072` runtime image.
+- The actual deployed hotfix uses the narrowed class-member schema contract,
+  so generic fallback should be able to fetch D365 case context and resolve the
+  generic notice when individualized search misses.
+- The generic sync job image from the prior section remains deployed in West;
+  this regression was isolated to the member-facing runtime image.
+
+**Follow-ups:**
+- Run an interactive browser canary for `AALG003`: ask for the notice, confirm
+  no individualized hit, confirm generic fallback opens the Allergy PDF side
+  drawer, and confirm the chat response uses the narrowed Dynamics values.
+
+---
+
+### Generic Notice Flat Prefix + Prompt Contract — COMPLETED 2026-05-13
+
+**Plan/context:** Active plan remains
+`001-lucy-foundry-hosted-agent-migration.md`; this run adjusted the generic
+notice projection shape and Lucy prompt contract after the user confirmed the
+right target is not per-case deterministic subfolders, but one targeted generic
+PDF corpus under a single folder/prefix.
+
+**Status:** deployed and verified live.
+
+**Summary:**
+- Changed the generic notice copy destination from per-case virtual subfolders
+  to a single flat prefix:
+  `lucycmnotices/generic-notices/{case-slug}--{case-key}--{pdf-name}`.
+- Kept the existing West storage/search architecture. The source remains
+  SharePoint `Active Cases/Settlements/{case}/Print/Notice packet` with the
+  direct-`Print` legacy fallback; the destination remains West storage account
+  `aiagentlucyapex01`, container `lucycmnotices`, prefix `generic-notices`.
+- Preserved the existing individualized/member-specific notice corpus and
+  lookup order. Lucy still searches the 1M member-notice corpus first by Apex
+  ID/member signals, and only uses generic fallback after individualized lookup
+  misses.
+- Updated Lucy's generic lookup to list only the configured generic prefix
+  (`generic-notices/`) and score case-name aliases within that small corpus,
+  preferring flat blobs while retaining read compatibility for the currently
+  indexed legacy nested blobs during migration.
+- Tightened generic RAG scoping so URL-encoded Azure Search paths still match
+  the selected generic blob name; this keeps Search chunks tied to the selected
+  case notice instead of broad-searching unrelated generic notices.
+- Expanded `agent/app/agent_instructions.txt` with a play-by-play prompt
+  contract: individualized first, then West generic flat-prefix corpus, then
+  use the generic PDF as the case grounding document, then bridge to what the
+  member cares about using approved D365 fields, especially amount/check,
+  status, actions, timing, and rights.
+
+**Files changed:**
+- `agent/generic_notice_sync/sync.py`
+- `agent/generic_notice_sync/README.md`
+- `agent/app/.env.example`
+- `agent/app/user_functions.py`
+- `agent/app/agent_instructions.txt`
+- `agent/tests/test_generic_notice_sync.py`
+- `agent/tests/test_generic_notice_fallback.py`
+- `agent/tests/test_notice_tool_instructions.py`
+- `state/notice-retrieval-strategy.md`
+- `state/refactor-ledger.md`
+- `graphify-out/GRAPH_REPORT.md`, `graphify-out/graph.json`,
+  `graphify-out/graph.html`
+
+**Tests / validation run:**
+- `uv run --with pytest==8.3.4 --with requests --with tenacity python -m pytest -q agent/tests/test_generic_notice_sync.py agent/tests/test_generic_notice_fallback.py agent/tests/test_notice_tool_instructions.py agent/tests/test_lucy_field_policy.py`
+  - Result: `26 passed`.
+- `python3 -m compileall -q agent/app/user_functions.py agent/generic_notice_sync agent/tests/test_generic_notice_sync.py agent/tests/test_generic_notice_fallback.py agent/tests/test_notice_tool_instructions.py`
+  - Result: passed.
+- `uv run --with requests python - <<'PY' ... build_destination_blob_name('Acme Wage & Hour', 'Notice Packet.docx', source_item_id='item-1')`
+  - Result:
+    `generic-notices/acme-wage-hour--b87b85c0--Notice Packet.pdf`.
+- Live Azure Search datasource check:
+  - `lucy-notices-v2-datasource-generic-notices`
+  - container: `lucycmnotices`
+  - query/prefix: `generic-notices`
+- `graphify update .`
+  - Result: graph rebuilt to `2789` nodes, `4170` edges, `266` communities.
+
+**Deploy / live verification run:**
+- Built and pushed member-facing Lucy runtime:
+  - Image:
+    `agentlucyacreus2.azurecr.io/agent-lucy-eus2:codex-generic-flat-69dc0a3-20260513214027`
+  - Digest:
+    `sha256:8cabce33511f14e5522cf633859a0040b3730eeb9f5b3f71460cdfa6a71bf857`
+- Built and pushed West generic notice sync job:
+  - Image:
+    `acrapexintegrationprod.azurecr.io/generic-notice-sync:generic-notice-sync-flat-69dc0a3-20260513214027`
+  - Digest:
+    `sha256:f3f1c31bb77b4a4741d57fd29110e94d022a22c6790bd1c20c5c948adb1ddce9`
+- Deployed Lucy Container App `agent-lucy-eus2` to revision
+  `agent-lucy-eus2--0000075`.
+  - Revision state: `Running`, `100%` traffic.
+  - Health/smoke: `https://agent-lucy-eus2.purpleocean-f3514433.eastus2.azurecontainerapps.io/health`
+    returned HTTP `200`.
+- Deployed Container Apps Job `lucy-generic-notice-sync` in
+  `rg-apex-integration-prod` / West US to the new sync image.
+- Started sync execution `lucy-generic-notice-sync-hgx8ia8`.
+  - Start: `2026-05-13T21:43:05Z`
+  - End: `2026-05-13T22:00:51Z`
+  - Status: `Succeeded`
+  - Log samples confirmed flat copy names such as
+    `generic-notices/7-eleven--ea63dbcd--7-Eleven - Notice Packet.pdf`,
+    `generic-notices/amarok-llc--81afbf69--Amarok - Class Notice.pdf`,
+    and `generic-notices/american-air-balance-co-inc--76d89b5b--American Air - Notice.pdf`.
+  - One non-fatal source document failure was observed:
+    `Sierra At Tahoe LLC / Sierra At Tahoe - Notice - Copy.docx`
+    returned source status `400`; the job continued and succeeded.
+- Post-sync blob inventory for account `aiagentlucyapex01`, container
+  `lucycmnotices`, prefix `generic-notices/`:
+  - `total_prefix_blobs=1083`
+  - `flat_blobs=610`
+  - `legacy_or_nonflat_blobs=473`
+- Ran Azure AI Search generic-notices indexer
+  `lucy-notices-v2-indexer-generic-notices` after the copy completed.
+  - First pass was already in progress from `2026-05-13T21:55:22Z` and
+    completed at `2026-05-13T22:01:59Z`: `items_processed=431`,
+    `items_failed=0`, `errors=0`, `warnings=0`.
+  - Second explicit pass accepted with HTTP `202`, ran from
+    `2026-05-13T22:03:26Z` to `2026-05-13T22:06:26Z`:
+    `items_processed=199`, `items_failed=0`, `errors=0`, `warnings=0`.
+- Live Search query against `lucy-notices-v2` for `7-Eleven Notice Packet`
+  returned flat-path chunks ahead of the older nested projection:
+  - `metadata_storage_path`:
+    `https://aiagentlucyapex01.blob.core.windows.net/lucycmnotices/generic-notices/7-eleven--ea63dbcd--7-Eleven%20-%20Notice%20Packet.pdf`
+  - `metadata_storage_name`:
+    `7-eleven--ea63dbcd--7-Eleven - Notice Packet.pdf`
+  - Result count sampled: `8`; flat-path result score top hit:
+    `78.357925`.
+
+**Results:**
+- New generic notices copied by the sync job will land in one flat
+  `generic-notices/` folder/prefix instead of
+  `generic-notices/{case-slug}/...`.
+- The flattened West blob projection is now present and re-indexed through the
+  live `lucy-notices-v2` path Lucy uses.
+- Lucy's fallback lookup is now targeted at that one generic PDF corpus and no
+  longer depends on per-case subfolder listing.
+- Lucy's prompt now explicitly tells her how to bridge from a generic
+  case-specific PDF to the member's practical answer using D365, instead of
+  apologizing or stopping at "no individualized notice found."
+
+**Follow-ups:**
+- After the flat corpus is indexed and verified, decide whether to delete the
+  older nested `generic-notices/{case-slug}/...` projection or leave it as
+  temporary compatibility until Search deletion behavior is confirmed.
+- Investigate/document source-file fallout separately for copied-corpus gaps;
+  observed example in this run:
+  `Sierra At Tahoe LLC / Sierra At Tahoe - Notice - Copy.docx` returned status
+  `400` during source download/export.
+
+---
+
+### Generic Notice Flat Projection Cleanup + Search Tombstone Repair — COMPLETED 2026-05-13
+
+**Plan/context:** Active plan remains
+`001-lucy-foundry-hosted-agent-migration.md`. This closes the follow-up from the
+flat-prefix migration and records the user's corrected retrieval contract:
+individualized member notices and generic case notice templates are two
+different valid paths. The member corpus remains Apex-ID/member-signal driven;
+the generic corpus is a separate, flat, case-template RAG corpus under one
+targeted folder/prefix.
+
+**Status:** deployed, copied, indexed, tombstone-cleaned, and verified live.
+
+**Summary:**
+- Preserved the existing individualized notice path over the large
+  member-specific corpus. Apex ID remains the critical unique signal for member
+  PDFs because it is printed on each individualized notice page.
+- Kept generic notices separate from that member corpus. Generic notices are
+  case-level templates, one document reused for all members in the case; Lucy
+  scopes RAG to the generic notice corpus by case name/case slug/blob path, then
+  fills practical member-specific answers from D365.
+- Updated the generic notice sync projection to write a single canonical flat
+  blob per source case:
+  `lucycmnotices/generic-notices/{case-slug}--{case-key}--generic-notice.pdf`.
+- Retained source traceability in blob metadata:
+  `notice_source_type=generic_notice`, `case_name`, `case_slug`, `case_key`,
+  `original_file_name`, `source_file_name`, `sharepoint_item_id`, and
+  `sharepoint_case_folder_id`.
+- Added sync-side pruning so every non-active blob under `generic-notices/` is
+  removed after a successful source walk, including older nested
+  `generic-notices/{case-slug}/...` projections and older noncanonical flat
+  files.
+- Confirmed Azure AI Search did not automatically delete stale chunks after
+  the old blobs were removed, so stale `lucy-notices-v2` docs were manually
+  deleted by `chunk_id` only when their `metadata_storage_path` no longer
+  matched a live blob URL under the active flat corpus.
+
+**Files changed:**
+- `agent/generic_notice_sync/sync.py`
+- `agent/generic_notice_sync/README.md`
+- `agent/app/.env.example`
+- `agent/app/user_functions.py`
+- `agent/app/agent_instructions.txt`
+- `agent/app/lucy_field_policy.py`
+- `agent/tests/test_generic_notice_sync.py`
+- `agent/tests/test_generic_notice_fallback.py`
+- `agent/tests/test_notice_tool_instructions.py`
+- `agent/tests/test_lucy_field_policy.py`
+- `state/notice-retrieval-strategy.md`
+- `state/refactor-ledger.md`
+- `graphify-out/GRAPH_REPORT.md`, `graphify-out/graph.json`,
+  `graphify-out/graph.html`
+
+**Deploy / live verification run:**
+- Lucy runtime image deployed:
+  - Image:
+    `agentlucyacreus2.azurecr.io/agent-lucy-eus2:codex-generic-case-scope3-69dc0a3-20260513224006`
+  - Digest:
+    `sha256:8cc1318eca0096f9a81b8f72d1f894df5c991c43043b5dc9efdd540cfd508797`
+  - Active revision: `agent-lucy-eus2--0000079`
+  - Revision state: running/healthy with `100%` traffic.
+- Generic notice sync image deployed:
+  - Image:
+    `acrapexintegrationprod.azurecr.io/generic-notice-sync:generic-notice-sync-flat-prune-69dc0a3-20260513232214`
+  - Digest:
+    `sha256:ecf414e7c9a5405b53cd697bd54a125a0f2c00b597a55be6f83a20db29ae33ec`
+  - Manual execution: `lucy-generic-notice-sync-hnsbjgf`
+  - Start: `2026-05-13T23:24:25Z`
+  - End: `2026-05-13T23:35:33Z`
+  - Status: `Succeeded`
+- Post-prune West blob inventory:
+  - Account: `aiagentlucyapex01`
+  - Resource group: `rg-apex-lucy-prd-01`
+  - Azure resource location: `westus`
+  - Region/source role: West source-of-truth storage projection
+  - Container: `lucycmnotices`
+  - Prefix: `generic-notices/`
+  - Total live blobs under prefix: `525`
+  - Canonical `--generic-notice.pdf` blobs: `525`
+- Example live blob metadata:
+  - Blob:
+    `generic-notices/7-eleven--67966a96--generic-notice.pdf`
+  - `case_name=7 Eleven`
+  - `case_slug=7-eleven`
+  - `case_key=67966a96`
+  - `notice_source_type=generic_notice`
+  - `original_file_name=7-Eleven - Notice Packet.pdf`
+  - `sharepoint_case_folder_id=015OBNCLPK4PFP37YJ2BELKYHPJHKGY6QX`
+  - `sharepoint_item_id=015OBNCLJ77PQ2VXSZ7RBYLKJVMBQYEZD4`
+
+**Search/index validation:**
+- Search service:
+  - Name: `ailucyaisearch`
+  - Resource group: `rg-apex-lucy-prd-01`
+  - Azure resource location: `westus`
+  - Index Lucy uses: `lucy-notices-v2`
+- Ran `lucy-notices-v2-indexer-generic-notices` after the flat copy.
+  - Run ending `2026-05-13T23:20:24.24Z`: `itemsProcessed=177`,
+    `itemsFailed=0`.
+- Ran the same indexer after blob pruning.
+  - Run from `2026-05-13T23:39:45.413Z` to
+    `2026-05-13T23:39:48.55Z`: `itemsProcessed=0`, `itemsFailed=0`.
+  - Important finding: this did not delete stale Search chunks for deleted
+    blobs.
+- Manual Search tombstone cleanup against `lucy-notices-v2`:
+  - Active flat Blob URLs: `525`
+  - Generic Search docs seen before cleanup: `52224`
+  - Active generic Search docs before cleanup: `16188`
+  - Stale generic Search docs before cleanup: `36036`
+  - Deleted stale Search docs by `chunk_id`: `36036`
+- Post-cleanup Search verification:
+  - Active flat Blob URLs: `525`
+  - Generic Search docs seen: `16188`
+  - Active generic Search docs seen: `16188`
+  - Stale generic Search docs seen: `0`
+- Known-case query verification:
+  - Query for Allergy/Asthma returned only:
+    `https://aiagentlucyapex01.blob.core.windows.net/lucycmnotices/generic-notices/allergy-and-asthma--ef9fa239--generic-notice.pdf`
+    across the sampled top `8` hits.
+  - Query for 7-Eleven returned only:
+    `https://aiagentlucyapex01.blob.core.windows.net/lucycmnotices/generic-notices/7-eleven--67966a96--generic-notice.pdf`
+    across the sampled top `8` hits.
+
+**Tests / validation run:**
+- `uv run --with pytest==8.3.4 --with requests --with tenacity python -m pytest -q agent/tests/test_generic_notice_sync.py agent/tests/test_generic_notice_fallback.py agent/tests/test_notice_tool_instructions.py agent/tests/test_lucy_field_policy.py`
+  - Result: `31 passed`.
+- `uv run python -m compileall -q agent/app agent/generic_notice_sync`
+  - Result: passed.
+- `git diff --check`
+  - Result: passed.
+- `graphify update .`
+  - Result: graph rebuilt to `2860` nodes, `4277` edges, `263`
+    communities.
+
+**Results:**
+- The live West blob projection now contains exactly one flat generic notice
+  corpus under `lucycmnotices/generic-notices/`.
+- `lucy-notices-v2` now contains only active chunks for that flat corpus; stale
+  folder-era and stale noncanonical flat Search docs were removed.
+- Lucy's prompt and tool path now explicitly preserve both correct notice
+  paths: individualized Apex-ID notice first, generic case-template RAG
+  fallback second, D365 field fill in chat after generic grounding.
+
+**Follow-ups:**
+- Run an interactive browser canary for `AALG003`: ask for the notice, confirm
+  no individualized hit, confirm generic fallback opens
+  `allergy-and-asthma--ef9fa239--generic-notice.pdf`, and confirm the response
+  fills practical member data from D365 rather than implying the generic PDF
+  itself contains member-specific values.
+- Track copied-corpus source fallout separately for cases where SharePoint
+  source export fails or source folder history does not match the current
+  `Print/Notice packet` convention.
+
+---
+
+## Lucy Notices Regression RBAC + Generic Fallback Repair — completed 2026-05-14
+
+**Scope:**
+- Investigated live regression where Lucy could not retrieve member notices and
+  showed no visible generic notice fallback.
+- Preserved the current architecture:
+  - Lucy app/runtime: `agent-lucy-eus2` in East US 2.
+  - Notice Search and source storage projection: West resources under
+    `rg-apex-lucy-prd-01`.
+  - Search service: `ailucyaisearch`.
+  - Search index: `lucy-notices-v2`.
+  - Storage account/container: `aiagentlucyapex01` / `lucycmnotices`.
+  - Generic notice corpus: `lucycmnotices/generic-notices/`.
+
+**Findings:**
+- The member-specific Search path was still queried first, but AALG003 correctly
+  has no individualized PDF hit in `lucy-notices-v2`.
+- Generic fallback was blocked by a code mismatch: `_new_case_value` was removed
+  from the D365 select list whenever the live metadata cache did not report that
+  lookup backing field. That meant `_fetch_case_title_for_member(...)` had no
+  case GUID/title and logged generic fallback as unavailable.
+- Live ACA env still had `AZURE_STORAGE_CONTAINER_NAME=lucyrag`, while the
+  current member/generic notice PDFs live in `lucycmnotices`. Search results can
+  carry full `metadata_storage_path` URLs, so the tool also needed to preserve
+  the source container from Search metadata instead of rebuilding every URL from
+  the stale default.
+- RBAC gap found and repaired: the East US 2 app managed identity did not have
+  an explicit data-plane role on the West Search service.
+
+**Changes:**
+- `agent/app/user_functions.py`
+  - Preserves Dataverse lookup backing fields shaped like `_..._value` when
+    building the generic fallback member select list.
+  - Parses Search `metadata_storage_path`/URL values and keeps the source
+    container (`lucycmnotices`) instead of blindly using the default env
+    container.
+  - Prefers full Search paths before bare `metadata_storage_name` values.
+- `agent/tests/test_generic_notice_fallback.py`
+  - Added/updated focused tests for preserving `_new_case_value` even when live
+    field discovery omits it.
+  - Added a regression test proving full Search blob URLs under
+    `lucycmnotices` survive even if the env container is stale.
+- Azure RBAC:
+  - Assigned `Search Index Data Reader` to the `agent-lucy-eus2` managed
+    identity `88339d32-6498-46de-a6c8-ee42a7cdac20` on West Search service
+    `ailucyaisearch`.
+  - Assignment id: `008bf93a-115f-4b92-ac92-448deab4d291`.
+- Azure Container Apps:
+  - Deployed image
+    `agentlucyacreus2.azurecr.io/agent-lucy-eus2:codex-notice-rbac-fallback-69dc0a3-20260514030219`.
+  - Digest:
+    `sha256:2417e39286311f6191675442cf239bd7a6c9f2b984bd242514e69c9152f47eae`.
+  - Active revision: `agent-lucy-eus2--0000080`.
+  - Updated live env `AZURE_STORAGE_CONTAINER_NAME=lucycmnotices`.
+
+**Microsoft Learn / Foundry v2 evidence:**
+- Microsoft Learn MCP was available and used.
+- Reviewed current Foundry/Azure OpenAI deployment docs and Azure OpenAI On Your
+  Data RBAC guidance. Relevant RBAC pattern confirmed: Search data-plane access
+  uses Search data roles, and Storage/Search/OpenAI identities need explicit
+  role assignments when using managed identity across resources.
+
+**Verification:**
+- Focused tests:
+  - Command:
+    `uv run --with pytest==8.3.4 --with requests --with tenacity python -m pytest -q agent/tests/test_generic_notice_fallback.py agent/tests/test_notice_tool_instructions.py agent/tests/test_lucy_field_policy.py`
+  - Result: `22 passed`.
+- Broader notice/runtime sweep:
+  - Command:
+    `uv run --with pytest==8.3.4 --with requests --with tenacity --with opentelemetry-api python -m pytest -q agent/tests/test_generic_notice_sync.py agent/tests/test_generic_notice_fallback.py agent/tests/test_notice_tool_instructions.py agent/tests/test_lucy_field_policy.py agent/tests/test_lucy_responses_loop.py && uv run python -m compileall -q agent/app agent/generic_notice_sync && git diff --check`
+  - Result: `71 passed`; compile and diff check passed.
+- Live local function proof with deployed secrets:
+  - `find_notice_for_user_sync("25SEVE0002")` returned an individualized notice
+    PDF at
+    `https://aiagentlucyapex01.blob.core.windows.net/lucycmnotices/25SEVE0002.pdf`.
+  - `find_notice_for_user_sync("AALG003")` found no individualized notice,
+    resolved the D365 case title
+    `Paris v. Allergy & Asthma Medical Group of the Bay Area, Inc.`, and
+    returned the generic notice
+    `generic-notices/allergy-and-asthma--ef9fa239--generic-notice.pdf` with
+    D365 context including estimated settlement amount `$369.09`, class
+    workweeks `33.0`, and PAGA weeks `0.0`.
+- Live browser canary:
+  - URL:
+    `https://agent-lucy-eus2.purpleocean-f3514433.eastus2.azurecontainerapps.io/`
+  - Prompted Lucy with Apex ID `AALG003`, completed SSN last-four
+    authentication from D365 test data, and observed the flow in Chrome.
+  - Result: Lucy explicitly said the individualized mailed notice was not found,
+    then found the official generic case notice, opened
+    `Allergy - Notice v2.pdf` in the right-side PDF panel from
+    `lucycmnotices/generic-notices/allergy-and-asthma--ef9fa239--generic-notice.pdf`,
+    and bridged the generic notice with member-specific D365 values including
+    estimated payment `$369.09`, PAGA payment `$0.00`, and workweeks `33`.
+
+**Residual notes:**
+- `Chainlit context not found` still appears around notice progress-status
+  updates. It did not block retrieval or the right-side PDF render in the live
+  canary, but it is noise worth cleaning separately.
+- The page-rendered generic PDF text still contains sample/member text from the
+  source PDF itself. Lucy correctly distinguished that the PDF is the generic
+  case notice and used D365 for the authenticated member's personal amount.
+
+---
+
 ## Blocked / Abandoned Plans
 
 _none_

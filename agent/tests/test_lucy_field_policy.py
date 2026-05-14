@@ -9,6 +9,7 @@ from lucy_field_policy import (
     LUCY_AUTH_FIELDS,
     LUCY_CLASS_MEMBER_FORM_ID,
     LUCY_CLASS_MEMBER_FORM_TAB,
+    NOTICE_TEMPLATE_SCHEMA_MAP,
     class_member_fields_for_outcome,
     filter_record,
     member_disbursement_fields,
@@ -20,6 +21,50 @@ class LucyFieldPolicyTests(unittest.TestCase):
     def test_policy_records_live_form_source(self):
         self.assertEqual(LUCY_CLASS_MEMBER_FORM_ID, "05e90c7f-deeb-4e50-b9c0-f7bf207bb3a2")
         self.assertEqual(LUCY_CLASS_MEMBER_FORM_TAB, "Lucy Class Member Data")
+
+    def test_policy_includes_live_form_fields(self):
+        class_member_schema_fields = {
+            "new_apexid",
+            "new_fullname",
+            "new_firstname",
+            "new_lastname",
+            "new_shortsocial",
+            "new_address",
+            "new_city",
+            "new_state",
+            "new_zip",
+            "new_email",
+            "new_phonenumber",
+            "new_pinnumber",
+            "new_employeeid",
+            "new_estimatedsettlementamount",
+            "new_classworkweeks",
+            "new_pagaweeks",
+            "new_hiredate",
+            "new_termdate",
+            "new_rehiredate",
+            "new_secondtermdate",
+            "new_wagestatements",
+            "new_totalearnings",
+        }
+
+        self.assertTrue(class_member_schema_fields.issubset(class_member_fields_for_outcome("all")))
+
+    def test_notice_template_schema_map_uses_live_form_fields(self):
+        mapped_fields = {
+            mapping["d365_field"]
+            for mapping in NOTICE_TEMPLATE_SCHEMA_MAP.values()
+        }
+
+        self.assertEqual(
+            mapped_fields,
+            {
+                "new_estimatedsettlementamount",
+                "new_classworkweeks",
+                "new_pagaweeks",
+            },
+        )
+        self.assertTrue(mapped_fields.issubset(class_member_fields_for_outcome("all")))
 
     def test_auth_outcome_is_limited_to_identity_fields(self):
         self.assertEqual(class_member_fields_for_outcome("auth"), LUCY_AUTH_FIELDS)
