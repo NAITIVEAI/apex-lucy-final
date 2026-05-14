@@ -3099,6 +3099,41 @@ targeted folder/prefix.
 
 ---
 
+## Lucy Regular Notice Canary — completed 2026-05-14
+
+**Scope:**
+- Confirmed the non-fallback path after the generic fallback repair: when an
+  individualized/member-specific notice exists, Lucy must fetch that PDF first
+  and must not fall through to the generic notice.
+
+**Verification:**
+- Live Chainlit URL:
+  `https://agent-lucy-eus2.purpleocean-f3514433.eastus2.azurecontainerapps.io/`
+- Started a fresh chat to avoid reusing the prior AALG003 generic-fallback
+  session.
+- Prompted Lucy with Apex ID `25SEVE0002`, then authenticated with SSN last-four
+  `7488`.
+- Result: Lucy authenticated the member, found the individualized class member
+  notice, opened the right-side PDF drawer, and used the member notice URL:
+  `https://aiagentlucyapex01.blob.core.windows.net/lucycmnotices/25SEVE0002.pdf`.
+- Live ACA logs confirmed the call path:
+  - D365 query returned one `new_classmembers` result for `25SEVE0002` and
+    `new_shortsocial eq '7488'`.
+  - `NoticeSearch` started member notice lookup for Apex ID `25SEVE0002`.
+  - Search attempt `apex_id_filename` returned 5 PDF results.
+  - `5/5` results matched the Apex ID.
+  - Candidate blob URL selected:
+    `https://aiagentlucyapex01.blob.core.windows.net/lucycmnotices/25SEVE0002.pdf`.
+  - `Notice lookup terminal status recorded: pdf_found`.
+  - Pending side-panel PDF stored as `25SEVE0002.pdf`.
+
+**Conclusion:**
+- Regular individualized notice retrieval is working live.
+- Generic fallback remains fallback-only; it is not used when the member PDF is
+  present.
+
+---
+
 ## Blocked / Abandoned Plans
 
 _none_
