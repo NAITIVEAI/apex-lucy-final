@@ -84,6 +84,26 @@
     margin: 0.4rem 0;
 }
 
+.message-content h1,
+.message-content h2,
+.message-content h3 {
+    font-weight: 700;
+    line-height: 1.25;
+    margin: 0.65rem 0 0.35rem;
+}
+
+.message-content h1 {
+    font-size: 1.25rem;
+}
+
+.message-content h2 {
+    font-size: 1.1rem;
+}
+
+.message-content h3 {
+    font-size: 1rem;
+}
+
 .message-content ul,
 .message-content ol {
     margin: 0.4rem 0 0.4rem 1.25rem;
@@ -120,6 +140,26 @@
 .message-content a {
     color: #2563eb;
     text-decoration: underline;
+}
+
+.message-content table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 0.65rem 0;
+    font-size: 0.875rem;
+}
+
+.message-content th,
+.message-content td {
+    border: 1px solid #d1d5db;
+    padding: 0.45rem 0.55rem;
+    text-align: left;
+    vertical-align: top;
+}
+
+.message-content th {
+    background: rgba(255, 255, 255, 0.5);
+    font-weight: 700;
 }
 
 /* Connection status */

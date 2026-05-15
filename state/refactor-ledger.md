@@ -3317,6 +3317,59 @@ targeted folder/prefix.
 
 ---
 
+## HITL Portal Markdown History Rendering — completed 2026-05-15
+
+**Scope:**
+- Render transferred pre-handoff Lucy conversation history as markdown inside
+  the HITL portal chat transcript instead of showing raw markdown text.
+- Kept the change in the portal display layer only; no callback, routing,
+  storage, or Teams handoff contract changes.
+
+**Root cause:**
+- The server-rendered conversation history loop in
+  `portal/app/templates/conversation.html` emitted `message.content` directly
+  inside `.message-content`, so initial handoff history could appear as raw
+  markdown before or outside client-side rendering.
+- The client-side pre-handoff safety message in
+  `portal/app/static/js/conversation.js` also replayed a raw newline-delimited
+  preview of transferred messages, which could make markdown snippets visible
+  even when the actual transcript entries were rendered correctly.
+
+**Files changed:**
+- `portal/app/templates/conversation.html`
+- `portal/app/static/js/conversation.js`
+- `portal/app/static/css/conversation.css`
+- `agent/tests/test_portal_handoff_markdown.py`
+
+**Validation:**
+- `uv run --with pytest==8.3.4 python -m pytest -q agent/tests/test_portal_handoff_markdown.py`
+  - Result before deploy: `3 passed in 0.01s`.
+- `uv run python -m py_compile portal/app/agent_portal.py`
+  - Result before deploy: passed.
+- `git diff --check`
+  - Result before deploy: passed.
+- `graphify update .`
+  - Result: graph rebuilt; `9258 nodes`, `11385 edges`, `696 communities`.
+- Built and deployed portal image
+  `agentlucyacreus2.azurecr.io/agent-lucy-portal-eus2:codex-hitl-markdown-b051fdf-20260515040554`
+  to ACA revision `agent-lucy-portal-eus2--0000026`.
+- Revision verification showed `agent-lucy-portal-eus2--0000026` is healthy,
+  running, latest-ready, and receiving 100% traffic.
+- Live portal logs for revision `agent-lucy-portal-eus2--0000026` show startup
+  completed, `Conversation history functionality enabled`, and successful
+  200 responses for `/`, `/api/conversations/pending`, and
+  `/api/callbacks/pending`.
+
+**Result:**
+- Initial server-rendered history messages are marked for markdown hydration,
+  hydrated once on page load via the existing sanitized markdown renderer, and
+  the raw pre-handoff preview has been replaced with a rendered-transcript
+  status note.
+- Chat markdown tables and headings now have compact portal-specific styles so
+  Lucy's transferred summaries remain readable in the HITL transcript.
+
+---
+
 ## Blocked / Abandoned Plans
 
 _none_

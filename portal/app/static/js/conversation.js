@@ -24,6 +24,7 @@ document.addEventListener('DOMContentLoaded', function() {
     
     // Initial setup
     initializeWebSocket();
+    renderExistingMarkdownMessages();
     scrollToBottom();
     
     // Join the conversation when the page loads
@@ -300,7 +301,8 @@ document.addEventListener('DOMContentLoaded', function() {
         const safeText = String(text || '');
         if (window.marked) {
             try {
-                const rawHtml = window.marked.parse(safeText, { breaks: true, gfm: true });
+                const markdownSource = window.DOMPurify ? safeText : escapeHtml(safeText);
+                const rawHtml = window.marked.parse(markdownSource, { breaks: true, gfm: true });
                 if (window.DOMPurify) {
                     return window.DOMPurify.sanitize(rawHtml);
                 }
@@ -310,6 +312,15 @@ document.addEventListener('DOMContentLoaded', function() {
             }
         }
         return escapeHtml(safeText).replace(/\n/g, '<br>');
+    }
+
+    function renderExistingMarkdownMessages() {
+        document
+            .querySelectorAll('.message-content[data-markdown-content]:not([data-markdown-rendered])')
+            .forEach(element => {
+                element.innerHTML = renderMarkdown(element.textContent || '');
+                element.setAttribute('data-markdown-rendered', 'true');
+            });
     }
     
     // Send message via WebSocket
@@ -579,13 +590,10 @@ document.addEventListener('DOMContentLoaded', function() {
                     });
                 });
 
-                // Safety net: also drop a compact summary so reps see something even if styling hides historical cards
-                const preview = preHandoffConversation.messages
-                    .map(m => `${m.role}: ${m.content.substring(0, 120)}${m.content.length > 120 ? '…' : ''}`)
-                    .join('\n');
+                // Safety net: confirm load without repeating raw markdown snippets.
                 addMessageToUI({
                     role: 'system',
-                    content: `Loaded ${preHandoffConversation.messages.length} pre-handoff messages:\n${preview}`,
+                    content: `Loaded ${preHandoffConversation.messages.length} pre-handoff messages. The transferred transcript above is rendered from Lucy's markdown-formatted conversation history.`,
                     timestamp: new Date().toISOString(),
                     isHistorical: false
                 });
@@ -675,7 +683,8 @@ document.addEventListener('DOMContentLoaded', function() {
                     <div class="max-h-32 overflow-y-auto">
                         ${conv.messages.slice(0, 3).map(msg => `
                             <div class="text-xs mb-1">
-                                <span class="font-medium">${msg.role}:</span> ${msg.content.substring(0, 100)}${msg.content.length > 100 ? '...' : ''}
+                                <span class="font-medium">${escapeHtml(String(msg.role || 'message'))}:</span>
+                                <span class="message-content">${renderMarkdown(String(msg.content || '').substring(0, 100))}${String(msg.content || '').length > 100 ? '...' : ''}</span>
                             </div>
                         `).join('')}
                         ${conv.messages.length > 3 ? '<div class="text-xs text-gray-500">... and more</div>' : ''}
