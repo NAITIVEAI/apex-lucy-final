@@ -3134,6 +3134,116 @@ targeted folder/prefix.
 
 ---
 
+## Lucy Notice Fallback Prompt + Legacy Sync Rescue — completed 2026-05-14
+
+**Scope:**
+- Investigated screenshot regression for authenticated member Candice Mendiola
+  / Apex ID `CTRE559`, where Lucy stopped after the individualized notice miss
+  and did not present a generic notice.
+- Reviewed the whole notice prompt path for GPT-5.2-literal instructions that
+  could make Lucy apologize instead of completing the required fallback.
+- Preserved the COO-approved source contract: `/Print/Notice packet` remains
+  the primary generic notice location. Added a narrow legacy fallback only when
+  that folder is missing.
+
+**Root cause:**
+- Live logs showed `find_notice_for_user_sync("CTRE559")` did attempt the
+  generic fallback after the member-specific lookup missed.
+- D365 resolved the case to `Hernandez v. Creating a Legacy, Inc.`, but the
+  copied/indexed generic corpus had no matching `generic-notices/...` blob.
+- SharePoint source check found the case folder as
+  `Active Cases/Settlements/Creating a Legacy Inc`.
+- The standard `Print/Notice packet` folder was absent for this legacy case.
+- The usable generic notice existed one level below `Print` in a legacy mailing
+  folder:
+  `Print/2nd Mailing/Notice Packet to New CMS - pdf.pdf`.
+- The sync job only checked the standard folder and direct files under `Print`,
+  so it never copied/indexed this source document.
+- The system prompt and terminal tool miss text still contained old
+  individualized-miss apology language, which let GPT-5.2 produce the visible
+  "check back / no notice" answer after the generic corpus miss.
+
+**Files changed:**
+- `agent/app/agent_instructions.txt`
+  - Removed the old "If notice not found" apology shortcut.
+  - Added explicit play-by-play: individualized notice first; if missing, the
+    generic case notice fallback is required; only say unavailable after both
+    lookup paths fail.
+- `agent/app/user_functions.py`
+  - Changed the terminal no-PDF response to label the state as
+    `NOTICE_SOURCE_TYPE: notice_unavailable_after_generic_fallback` and
+    `NOTICE_LOOKUP_STATUS: no_pdf_after_individualized_and_generic`.
+- `agent/generic_notice_sync/sync.py`
+  - Kept `/Print/Notice packet` as primary.
+  - Kept direct `Print` notice files as the existing fallback.
+  - Added a one-level legacy scan of allowed mailing/notice folders under
+    `Print`, while explicitly avoiding `Mail Merge`, `Mail Merged`, `Postal`,
+    `Disbursement`, `CRM`, and `test` folders.
+- `agent/tests/test_notice_tool_instructions.py`
+  - Added prompt regression coverage so the old apology shortcut cannot return.
+- `agent/tests/test_generic_notice_fallback.py`
+  - Updated terminal miss expectations to require both individualized and
+    generic fallback paths.
+- `agent/tests/test_generic_notice_sync.py`
+  - Added coverage for a missing `Print/Notice packet` folder with a generic
+    notice in a one-level legacy mailing folder, and confirmed `Mail Merged` is
+    not scanned.
+
+**Verification:**
+- Focused tests:
+  `uv run --with pytest==8.3.4 --with requests --with tenacity python -m pytest -q agent/tests/test_notice_tool_instructions.py agent/tests/test_generic_notice_fallback.py agent/tests/test_generic_notice_sync.py`
+  - Result: `27 passed`.
+- Compile / graph / diff:
+  `uv run python -m compileall -q agent/app agent/generic_notice_sync && graphify update . && git diff --check`
+  - Result: compile passed; graph rebuilt with `9196 nodes, 11316 edges, 685
+    communities`; diff check passed.
+- Source selector proof:
+  - `list_notice_pdfs(..., "Creating a Legacy Inc", ...)` selected
+    `Notice Packet to New CMS - pdf.pdf`, SharePoint item
+    `015OBNCLITJQH3YOA7ZVEYSOQQ4OWDEXBU`, size `2175968`.
+- Deploy:
+  - Built and pushed app image
+    `agentlucyacreus2.azurecr.io/agent-lucy-eus2:codex-notice-prompt-sync-da4347a-20260514194414`.
+  - Deployed Lucy ACA revision `agent-lucy-eus2--0000081`.
+  - Built and pushed sync image
+    `acrapexintegrationprod.azurecr.io/generic-notice-sync:generic-notice-sync-mailing-fallback-da4347a-20260514194414`.
+  - Updated Container Apps job `lucy-generic-notice-sync` to that image.
+- Sync execution:
+  - Started execution `lucy-generic-notice-sync-ncjuj16`.
+  - Observed log:
+    `Syncing generic notice case=Creating a Legacy Inc file=Notice Packet to New CMS - pdf.pdf blob=generic-notices/creating-a-legacy-inc--1307a7a2--generic-notice.pdf`.
+  - Verified blob in West storage account `aiagentlucyapex01`, container
+    `lucycmnotices`, path
+    `generic-notices/creating-a-legacy-inc--1307a7a2--generic-notice.pdf`,
+    size `2175968`.
+- Search / vector index:
+  - Ran Azure AI Search indexer
+    `lucy-notices-v2-indexer-generic-notices` on service `ailucyaisearch`.
+  - Indexer result: `success`, `itemsProcessed=21`, `itemsFailed=0`, end
+    `2026-05-15T02:56:23.608Z`.
+  - Queried `lucy-notices-v2`; top results now include
+    `https://aiagentlucyapex01.blob.core.windows.net/lucycmnotices/generic-notices/creating-a-legacy-inc--1307a7a2--generic-notice.pdf`.
+- Live post-deploy canary:
+  - Opened the deployed Chainlit app and submitted the screenshot case flow:
+    notice explanation request, then `Candice Mendiola 8524`.
+  - ACA logs show D365 auth resolved Apex ID `CTRE559`, then
+    `Notice lookup source_type=generic_notice_fallback apex_id=CTRE559
+    case=Hernandez v. Creating a Legacy, Inc.`
+  - ACA logs show SAS generation for
+    `https://aiagentlucyapex01.blob.core.windows.net/lucycmnotices/generic-notices/creating-a-legacy-inc--1307a7a2--generic-notice.pdf`.
+  - ACA logs show `Notice lookup terminal status recorded: pdf_found`.
+
+**Current status:**
+- The `CTRE559` generic notice source is now copied into the flat West blob
+  corpus and searchable through `lucy-notices-v2`.
+- The prompt/tool path no longer allows Lucy to stop after only the
+  individualized notice miss.
+- The legacy sync rescue is additive only; it does not replace the standard
+  `/Print/Notice packet` rule that already works for the successfully migrated
+  cases.
+
+---
+
 ## Blocked / Abandoned Plans
 
 _none_

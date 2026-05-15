@@ -45,6 +45,19 @@ class TestNoticeToolInstructions(unittest.TestCase):
         self.assertIn("How much is my check?", text)
         self.assertIn("Never imply that the generic PDF contains member-specific values", text)
 
+    def test_prompt_has_no_individualized_miss_apology_shortcut(self) -> None:
+        instructions_path = (
+            Path(__file__).resolve().parents[1] / "app" / "agent_instructions.txt"
+        )
+        text = instructions_path.read_text()
+
+        self.assertIn("Never stop after only the individualized notice miss", text)
+        self.assertIn("no individualized or generic case notice was available after both lookup paths", text)
+        self.assertIn("generic case notice fallback is part of the required tool path", text)
+        self.assertNotIn("If notice not found", text)
+        self.assertNotIn("I'm so sorry, I wasn't able to find your notice this time", text)
+        self.assertNotIn("check back in about two weeks", text)
+
 
 if __name__ == "__main__":
     unittest.main()

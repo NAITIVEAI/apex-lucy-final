@@ -5679,10 +5679,16 @@ def find_notice_for_user_sync(apex_id: str) -> str:
                 )
                 _update_progress("Done", 100)
                 return (
-                    f"{extended_note}I couldn't find a notice document for APEX ID {apex_id}. "
-                    "This sometimes happens when there's a delay between when a notice is mailed "
-                    "and when it becomes available in our system. You can check back in about two weeks, "
-                    "or I can help you with other questions about your case."
+                    f"{extended_note}I checked both required notice paths for APEX ID {apex_id}: "
+                    "the individualized member notice corpus first, then the generic case notice packet "
+                    f"fallback{f' for {generic_case_title}' if generic_case_title else ''}. "
+                    "No notice PDF is available from either path right now.\n\n"
+                    "**NOTICE_SOURCE_TYPE:** notice_unavailable_after_generic_fallback\n"
+                    "**NOTICE_LOOKUP_STATUS:** no_pdf_after_individualized_and_generic\n\n"
+                    "Use the authenticated Dynamics member/case record for any follow-up answer. "
+                    "Do not describe this as only an individualized-notice miss, and do not ask the "
+                    "member to check back before offering the case/status/payment details available "
+                    "from Dynamics."
                 )
 
             # Choose the best document result

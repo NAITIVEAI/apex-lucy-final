@@ -15,6 +15,7 @@ from generic_notice_sync.sync import (
     build_destination_blob_name,
     build_notice_packet_path,
     item_fingerprint,
+    list_notice_pdfs,
     normalize_drive_relative_path,
     should_upload,
     sync_generic_notices,
@@ -163,6 +164,41 @@ class GenericNoticeSyncTests(unittest.TestCase):
         self.assertFalse(_is_case_level_notice_source_file("Commercial Lighting - Notice - Trevor Lawson.pdf"))
         self.assertTrue(_is_case_level_notice_source_file("About Food - Notice of Pendency.docx"))
         self.assertTrue(_is_case_level_notice_source_file("American Pasteurization Company - Notice Packet.pdf"))
+
+    def test_list_notice_pdfs_falls_back_to_one_level_mailing_folder(self):
+        class Graph:
+            def __init__(self):
+                self.paths = []
+
+            def get_all(self, url):
+                from urllib.parse import unquote
+
+                path = unquote(url.split("/root:", 1)[1].split(":/children", 1)[0]).strip("/")
+                self.paths.append(path)
+                if path.endswith("/Print/Notice packet"):
+                    response = requests.Response()
+                    response.status_code = 404
+                    raise requests.HTTPError("missing", response=response)
+                if path.endswith("/Print"):
+                    return [
+                        {"name": "Mail Merged", "folder": {}},
+                        {"name": "Postal Sort", "folder": {}},
+                        {"name": "2nd Mailing", "folder": {}},
+                    ]
+                if path.endswith("/Print/2nd Mailing"):
+                    return [
+                        {"name": "CTRE559.pdf", "file": {}, "id": "member-pdf"},
+                        {"name": "Notice Packet to New CMS - pdf.pdf", "file": {}, "id": "notice-pdf"},
+                        {"name": "Correction Notice Packet.docx", "file": {}, "id": "correction-docx"},
+                    ]
+                raise AssertionError(f"unexpected path: {path}")
+
+        graph = Graph()
+        selected = list_notice_pdfs(graph, "drive", "Creating a Legacy Inc", SyncConfig())
+
+        self.assertEqual(selected[0]["id"], "notice-pdf")
+        self.assertIn("Active Cases/Settlements/Creating a Legacy Inc/Print/2nd Mailing", graph.paths)
+        self.assertNotIn("Active Cases/Settlements/Creating a Legacy Inc/Print/Mail Merged", graph.paths)
 
     def test_sync_uploads_only_changed_generic_notice_pdf(self):
         from generic_notice_sync import sync as sync_module

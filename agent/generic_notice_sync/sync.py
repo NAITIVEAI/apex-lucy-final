@@ -284,9 +284,35 @@ def list_notice_pdfs(
         for item in print_children
         if "file" in item and _is_notice_packet_file(str(item.get("name", "")))
     ]
-    if not print_notice_items:
+    if print_notice_items:
+        return [_select_best_notice_source(print_notice_items)]
+
+    nested_notice_items: list[dict[str, Any]] = []
+    for folder in print_children:
+        folder_name = str(folder.get("name", ""))
+        if "folder" not in folder or not _is_print_notice_subfolder(folder_name):
+            continue
+        folder_path = "/".join(part for part in (print_path, folder_name) if part)
+        try:
+            folder_children = graph.get_all(graph_path_children_url(drive_id, folder_path))
+        except requests.HTTPError as exc:
+            status = exc.response.status_code if exc.response is not None else "unknown"
+            LOG.debug(
+                "No nested Print notice folder for case=%s folder=%s status=%s",
+                case_folder_name,
+                folder_name,
+                status,
+            )
+            continue
+        nested_notice_items.extend(
+            item
+            for item in folder_children
+            if "file" in item and _is_notice_packet_file(str(item.get("name", "")))
+        )
+
+    if not nested_notice_items:
         return []
-    return [_select_best_notice_source(print_notice_items)]
+    return [_select_best_notice_source(nested_notice_items)]
 
 
 def _is_supported_notice_source_file(file_name: str) -> bool:
@@ -307,6 +333,14 @@ def _is_notice_packet_file(file_name: str) -> bool:
     if not _is_case_level_notice_source_file(file_name):
         return False
     return "notice" in lowered
+
+
+def _is_print_notice_subfolder(folder_name: str) -> bool:
+    """Allow one-level legacy mailing folders without entering member mail-merge folders."""
+    lowered = (folder_name or "").lower()
+    if any(term in lowered for term in ("mail merged", "mail merge", "postal", "disbursement", "crm", "test")):
+        return False
+    return "mailing" in lowered or "notice" in lowered
 
 
 def _is_person_name_fragment(value: str) -> bool:

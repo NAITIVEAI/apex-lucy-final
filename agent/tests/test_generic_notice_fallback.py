@@ -625,7 +625,11 @@ class GenericNoticeFallbackTests(unittest.TestCase):
         ) as generate_sas:
             output = user_functions.find_notice_for_user_sync("A123")
 
-        self.assertIn("couldn't find a notice document", output)
+        self.assertIn("I checked both required notice paths", output)
+        self.assertIn("NOTICE_SOURCE_TYPE:** notice_unavailable_after_generic_fallback", output)
+        self.assertIn("NOTICE_LOOKUP_STATUS:** no_pdf_after_individualized_and_generic", output)
+        self.assertIn("Use the authenticated Dynamics member/case record", output)
+        self.assertNotIn("check back in about two weeks", output)
         generate_sas.assert_not_called()
 
 
