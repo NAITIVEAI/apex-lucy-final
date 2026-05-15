@@ -289,9 +289,37 @@ class CoaReasonWritebackTests(unittest.TestCase):
         self.assertTrue(result["success"])
         self.assertEqual(calls[1][0], "new_memberdisbursements")
         self.assertIn("new_checkamount", calls[1][1])
-        self.assertNotIn("new_checkreissuerequest", calls[1][1])
+        self.assertIn("new_checkreissuerequest", calls[1][1])
         self.assertNotIn("new_name", calls[1][1])
-        self.assertNotIn("new_checkreissuerequest", json.dumps(result))
+        self.assertIn("new_checkreissuerequest", json.dumps(result))
+
+    def test_member_disbursement_select_omits_invalid_web_api_fields(self):
+        calls = []
+
+        def fake_query(entity, filter_str=None, select=None):
+            calls.append((entity, select))
+            if entity == "new_classmembers":
+                return json.dumps([{"new_classmemberid": "member-guid", "new_apexid": "A123"}])
+            invalid_fields = {"new_disbursementnumber", "new_case", "new_casedisbursement"}
+            self.assertTrue(invalid_fields.isdisjoint(set(select.split(","))))
+            return json.dumps([
+                {
+                    "new_memberdisbursementid": "disb-guid",
+                    "_new_classmember_value": "member-guid",
+                    "_new_case_value": "case-guid",
+                    "new_checkamount": 25,
+                    "new_checkreissuerequest": False,
+                    "new_checkreissuecompleted": None,
+                }
+            ])
+
+        with patch.object(self.user_functions, "query_entity_sync", side_effect=fake_query):
+            result = json.loads(self.user_functions.get_member_disbursements_sync("A123"))
+
+        self.assertTrue(result["success"])
+        self.assertEqual(result["disbursement_count"], 1)
+        self.assertEqual(result["disbursements"][0]["_new_case_value"], "case-guid")
+        self.assertIn("new_checkreissuerequest", result["disbursements"][0])
 
     def test_generic_notice_member_context_uses_safe_labels(self):
         context = self.user_functions.build_generic_notice_member_context(

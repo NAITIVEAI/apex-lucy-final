@@ -3244,6 +3244,79 @@ targeted folder/prefix.
 
 ---
 
+## Lucy Disbursement Web API Select Repair — completed 2026-05-15
+
+**Scope:**
+- Fixed a false no-disbursement path for check/payment questions where Lucy
+  could authenticate a member but receive an empty disbursement list from
+  Dataverse.
+- Kept the change inside the existing COO field-policy boundary; did not
+  reintroduce broad Dataverse tools or check-reissue write tools.
+
+**Root cause:**
+- Live read-only Dataverse validation for Apex ID `25TEND12509` confirmed the
+  member exists and has one related `new_memberdisbursement`.
+- The Dynamics screen is not a saved view alone. The live source is the
+  `new_classmember` main form named `Information`, form id
+  `05e90c7f-deeb-4e50-b9c0-f7bf207bb3a2`, tab `Lucy Class Member Data`.
+- The right-side payment grid on that tab is subgrid
+  `Lucy_Member_Disbursements`, relationship
+  `new_new_classmember_new_memberdisbursement_ClassMember`, using saved view
+  `Active Member Disbursements`
+  (`ec040b47-83c8-48d5-99f0-4bc80beba904`).
+- The previous disbursement manifest could send saved-view/link or lookup
+  logical names in `$select` that are not directly selectable Web API
+  properties, including `new_disbursementnumber`, `new_case`,
+  `new_casedisbursement`, and `modifiedby`.
+- Dataverse returned HTTP 400 for those invalid properties. Lucy's generic
+  `query_entity` helper converts query errors to `[]`, so the user-facing path
+  looked like "no disbursements found."
+
+**Files changed:**
+- `agent/app/lucy_field_policy.py`
+- `agent/app/user_functions.py`
+- `agent/tests/test_lucy_field_policy.py`
+- `agent/tests/test_coa_reason_writeback.py`
+- `agent/tests/test_generic_notice_fallback.py`
+
+**Validation:**
+- `uv run --with pytest==8.3.4 --with requests --with tenacity python -m pytest -q agent/tests/test_lucy_field_policy.py agent/tests/test_coa_reason_writeback.py agent/tests/test_generic_notice_fallback.py`
+  - Result: `34 passed`.
+- `uv run python -m compileall -q agent/app/lucy_field_policy.py agent/app/user_functions.py`
+  - Result: passed.
+- `git diff --check`
+  - Result: passed.
+- `graphify update .`
+  - Result: graph rebuilt; `9235 nodes`, `11360 edges`, `693 communities`.
+- Live read-only Dataverse check with the post-fix manifest select returned
+  `member_count=1` and `disbursement_count=1` for Apex ID `25TEND12509`; the
+  returned row includes amount/check/date/cashed/void/reissue fields and the
+  class-member lookup matches the authenticated member.
+- Built and deployed app image
+  `agentlucyacreus2.azurecr.io/agent-lucy-eus2:codex-reissue-view-fields-7275661-20260515025629`
+  to ACA revision `agent-lucy-eus2--0000082`; the revision became latest-ready
+  and received 100% traffic.
+- Live Chainlit canary:
+  - User flow: `I need to request a check reissue` -> `Name: Siu Shan Lam,
+    Last 4: 7849`.
+  - Lucy authenticated Apex ID `25TEND12509`.
+  - ACA logs show `get_member_disbursements_sync` selected only Web API-safe
+    fields:
+    `new_memberdisbursementid,_new_classmember_value,_new_case_value,_new_disbursementdate_value,new_checkamount,new_checknumbertop,new_checkcashed,new_checkdate,new_checkvoiddate,new_checkreissuerequest,new_checkreissuecompleted,cr7fe_bankaccountnumber,createdon,_modifiedby_value,cr7fe_postalsort,cr7fe_traypc,cr7fe_mailbarcode`.
+  - ACA logs show `Query for new_memberdisbursements returned 1 results` and
+    `Found 1 disbursement(s) for member 25TEND12509`.
+  - Lucy's response surfaced the real check: `$459.43`, check `17266`, issue
+    date May 9, 2026, cashed May 12, 2026, current status `Cashed`, and did
+    not offer an automatic reissue for a cashed check.
+
+**Result:**
+- `get_member_disbursements_sync` now uses Web API-safe disbursement select
+  fields, including lookup-value properties for internal joins and
+  `new_checkreissuerequest` as the authoritative member-disbursement reissue
+  read value.
+
+---
+
 ## Blocked / Abandoned Plans
 
 _none_

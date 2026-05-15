@@ -91,7 +91,7 @@ class GenericNoticeFallbackTests(unittest.TestCase):
 
         self.assertIn("Estimated settlement amount: $1,234.50", context)
         self.assertIn("Class count: 12", context)
-        self.assertNotIn("Class count metric", context)
+        self.assertIn("Class count metric: weeks", context)
         self.assertNotIn("not approved", context)
 
     def test_member_record_select_is_filtered_to_live_d365_fields(self):

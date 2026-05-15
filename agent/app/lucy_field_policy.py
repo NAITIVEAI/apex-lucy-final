@@ -5,6 +5,10 @@ Source of truth:
 - Main form: Information
 - Form ID: 05e90c7f-deeb-4e50-b9c0-f7bf207bb3a2
 - Tab: Lucy Class Member Data
+- Disbursement subgrid: Lucy_Member_Disbursements
+- Subgrid saved view: Active Member Disbursements
+- Saved view ID: ec040b47-83c8-48d5-99f0-4bc80beba904
+- Relationship: new_new_classmember_new_memberdisbursement_ClassMember
 
 The policy separates fields Lucy may reason about from internal IDs needed to
 join Dataverse records. Internal IDs are tool plumbing, not user-facing context.
@@ -17,6 +21,12 @@ from typing import Iterable
 
 LUCY_CLASS_MEMBER_FORM_ID = "05e90c7f-deeb-4e50-b9c0-f7bf207bb3a2"
 LUCY_CLASS_MEMBER_FORM_TAB = "Lucy Class Member Data"
+LUCY_MEMBER_DISBURSEMENT_SUBGRID_ID = "Lucy_Member_Disbursements"
+LUCY_MEMBER_DISBURSEMENT_VIEW_ID = "ec040b47-83c8-48d5-99f0-4bc80beba904"
+LUCY_MEMBER_DISBURSEMENT_VIEW_NAME = "Active Member Disbursements"
+LUCY_MEMBER_DISBURSEMENT_RELATIONSHIP = (
+    "new_new_classmember_new_memberdisbursement_ClassMember"
+)
 
 CLASS_MEMBER_ENTITY_SET = "new_classmembers"
 MEMBER_DISBURSEMENT_ENTITY_SET = "new_memberdisbursements"
@@ -29,6 +39,8 @@ CLASS_MEMBER_INTERNAL_FIELDS = (
 MEMBER_DISBURSEMENT_INTERNAL_FIELDS = (
     "new_memberdisbursementid",
     "_new_classmember_value",
+    "_new_case_value",
+    "_new_disbursementdate_value",
 )
 
 LUCY_AUTH_FIELDS = (
@@ -55,7 +67,9 @@ LUCY_CONTACT_FIELDS = (
 LUCY_SETTLEMENT_FIELDS = (
     "new_estimatedsettlementamount",
     "new_classworkweeks",
+    "cr7fe_classcountmetric",
     "new_pagaweeks",
+    "cr7fe_pagacountmetric",
 )
 
 LUCY_EMPLOYMENT_FIELDS = (
@@ -88,10 +102,25 @@ NOTICE_TEMPLATE_SCHEMA_MAP = {
         "d365_field": "new_classworkweeks",
         "label": "Class count",
     },
+    "class_count_metric": {
+        "d365_entity": CLASS_MEMBER_ENTITY_SET,
+        "d365_field": "cr7fe_classcountmetric",
+        "label": "Class count metric",
+    },
     "paga_count": {
         "d365_entity": CLASS_MEMBER_ENTITY_SET,
         "d365_field": "new_pagaweeks",
         "label": "PAGA count",
+    },
+    "paga_count_metric": {
+        "d365_entity": CLASS_MEMBER_ENTITY_SET,
+        "d365_field": "cr7fe_pagacountmetric",
+        "label": "PAGA count metric",
+    },
+    "member_status": {
+        "d365_entity": CLASS_MEMBER_ENTITY_SET,
+        "d365_field": "new_potentialclassmemberstatus",
+        "label": "Member status",
     },
 }
 
@@ -101,15 +130,14 @@ LUCY_MEMBER_DISBURSEMENT_FIELDS = (
     "new_checkcashed",
     "new_checkdate",
     "new_checkvoiddate",
+    "new_checkreissuerequest",
+    "new_checkreissuecompleted",
     "cr7fe_bankaccountnumber",
-    "new_disbursementnumber",
-    "new_case",
     "createdon",
-    "modifiedby",
+    "_modifiedby_value",
     "cr7fe_postalsort",
     "cr7fe_traypc",
     "cr7fe_mailbarcode",
-    "new_casedisbursement",
 )
 
 LUCY_CLASS_MEMBER_READ_FIELDS_BY_OUTCOME = {
@@ -187,4 +215,10 @@ def restrict_fields(requested_fields: str | None, allowed_fields: Iterable[str])
 
 def filter_record(record: dict, allowed_fields: Iterable[str]) -> dict:
     allowed = set(allowed_fields)
-    return {key: value for key, value in record.items() if key in allowed or key.startswith("@")}
+    return {
+        key: value
+        for key, value in record.items()
+        if key in allowed
+        or key.startswith("@")
+        or (key.split("@", 1)[0] in allowed if "@" in key else False)
+    }

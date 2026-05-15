@@ -1528,6 +1528,7 @@ async def query_entity(entity: str, filter_str: Optional[str] = None, select: Op
         headers = {
             "Authorization": f"Bearer {access_token}",
             "Accept": "application/json",
+            "Prefer": 'odata.include-annotations="OData.Community.Display.V1.FormattedValue"',
             "OData-MaxVersion": "4.0",
             "OData-Version": "4.0"
         }
