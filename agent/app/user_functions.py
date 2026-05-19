@@ -58,7 +58,6 @@ from tenacity import (
     retry_if_exception_type,
 )
 import asyncio
-import aiohttp
 import functools
 import urllib.parse
 import time
@@ -2145,10 +2144,9 @@ async def get_entity_metadata(entity: str) -> dict:
         "Authorization": f"Bearer {access_token}",
         "Accept": "application/json"
     }
-    async with aiohttp.ClientSession() as session:
-        async with session.get(url, headers=headers) as response:
-            response.raise_for_status()
-            return await response.json()
+    response = requests.get(url, headers=headers)
+    response.raise_for_status()
+    return response.json()
 
 def get_entity_metadata_sync(entity):
     return json.dumps(_safe_async_run(get_entity_metadata(entity)))
