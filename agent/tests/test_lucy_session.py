@@ -116,13 +116,18 @@ if "lucy_core.runtime" not in sys.modules:
     print("Error: lucy_core.runtime should now be in sys.modules", file=sys.stderr)
     sys.exit(1)
 """
+        # We need to make sure site-packages are included so opentelemetry can be found
+        current_pythonpath = os.environ.get("PYTHONPATH", "")
+        new_pythonpath = str(Path(__file__).resolve().parents[2] / "agent" / "app")
+        if current_pythonpath:
+            new_pythonpath = f"{new_pythonpath}:{current_pythonpath}"
         result = subprocess.run(
             [sys.executable, "-c", script],
             check=False,
             cwd=Path(__file__).resolve().parents[2],
             env={
                 **os.environ,
-                "PYTHONPATH": str(Path(__file__).resolve().parents[2] / "agent" / "app"),
+                "PYTHONPATH": new_pythonpath,
             },
             text=True,
             capture_output=True,
