@@ -129,6 +129,19 @@ def should_upload(item: dict[str, Any], ledger_entry: dict[str, Any] | None) -> 
     return item_fingerprint(item) != ledger_entry.get("source")
 
 
+class CaseDocumentsListingError(Exception):
+    """A Case Documents folder listing failed for a reason other than 404.
+
+    Distinguished from a genuinely missing folder so transient Graph errors
+    (429/5xx/auth) can never make a case's mirrored blobs look stale.
+    """
+
+    def __init__(self, case_folder_name: str, status: Any) -> None:
+        super().__init__(f"Listing failed for case={case_folder_name} status={status}")
+        self.case_folder_name = case_folder_name
+        self.status = status
+
+
 class GraphClient:
     def __init__(self, token: str, *, session: requests.Session | None = None) -> None:
         self._session = session or requests.Session()
@@ -186,10 +199,12 @@ def get_drive_id(graph: GraphClient, site_id: str, drive_name: str) -> str:
     for drive in drives:
         if str(drive.get("name", "")).strip().lower() == preferred:
             return str(drive["id"])
-    for drive in drives:
-        if str(drive.get("driveType", "")).lower() == "documentlibrary":
-            return str(drive["id"])
-    raise RuntimeError(f"No SharePoint document library drive found for {site_id}")
+    # No fallback on purpose: a config typo must fail loudly rather than
+    # silently mirror a different document library into the portal container.
+    available = ", ".join(sorted(str(drive.get("name", "")) for drive in drives)) or "none"
+    raise RuntimeError(
+        f"Drive named {drive_name!r} not found on site {site_id} (available: {available})"
+    )
 
 
 def list_case_folders(graph: GraphClient, drive_id: str, config: SyncConfig) -> list[dict[str, Any]]:
@@ -208,9 +223,20 @@ def list_case_documents(
     try:
         children = graph.get_all(graph_path_children_url(drive_id, documents_path))
     except requests.HTTPError as exc:
-        status = exc.response.status_code if exc.response is not None else "unknown"
-        LOG.debug("No Case Documents folder for case=%s status=%s", case_folder_name, status)
-        return []
+        status = exc.response.status_code if exc.response is not None else None
+        if status == 404:
+            LOG.debug("No Case Documents folder for case=%s", case_folder_name)
+            return []
+        raise CaseDocumentsListingError(case_folder_name, status or "unknown") from exc
+    for item in children:
+        if "folder" in item:
+            # v1 walks the Case Documents root only (discovery showed flat
+            # folders); warn so we notice if the convention changes.
+            LOG.warning(
+                "Skipping nested subfolder in Case Documents case=%s folder=%s",
+                case_folder_name,
+                item.get("name", ""),
+            )
     return [
         item
         for item in children
@@ -325,8 +351,10 @@ def sync_case_documents(
         "uploaded": 0,
         "skipped": 0,
         "failed": 0,
+        "listing_failed": 0,
         "missing_case_documents": 0,
         "stale_deleted": 0,
+        "prune_skipped": 0,
     }
     active_blob_names: set[str] = set()
     for case_folder in case_folders:
@@ -334,7 +362,12 @@ def sync_case_documents(
         if not case_name:
             continue
         stats["cases_seen"] += 1
-        documents = list_case_documents(graph, drive_id, case_name, config)
+        try:
+            documents = list_case_documents(graph, drive_id, case_name, config)
+        except CaseDocumentsListingError as exc:
+            stats["listing_failed"] += 1
+            LOG.warning("Case Documents listing failed case=%s status=%s", case_name, exc.status)
+            continue
         if not documents:
             stats["missing_case_documents"] += 1
             continue
@@ -382,7 +415,17 @@ def sync_case_documents(
             stats["uploaded"] += 1
 
     if not config.dry_run:
-        if stats["cases_seen"] > 0 and stats["files_seen"] > 0:
+        # Prune only after a fully clean run: a listing or download failure
+        # means active_blob_names is incomplete, and pruning against an
+        # incomplete set would delete healthy mirrored documents.
+        if stats["listing_failed"] > 0 or stats["failed"] > 0:
+            stats["prune_skipped"] = 1
+            LOG.warning(
+                "Skipping stale-blob prune: listing_failed=%s failed=%s",
+                stats["listing_failed"],
+                stats["failed"],
+            )
+        elif stats["cases_seen"] > 0 and stats["files_seen"] > 0:
             stats["stale_deleted"] = prune_stale_case_document_blobs(
                 container_client,
                 active_blob_names=active_blob_names,

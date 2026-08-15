@@ -9,10 +9,12 @@ import requests
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from case_documents_sync.sync import (
+    CaseDocumentsListingError,
     SyncConfig,
     blob_content_type,
     build_case_documents_path,
     build_destination_blob_name,
+    get_drive_id,
     is_eligible_case_document,
     is_mirror_blob,
     item_fingerprint,
@@ -37,10 +39,11 @@ def file_item(name, item_id="item-1", size=100, etag="e1"):
 
 
 class FakeGraph:
-    def __init__(self, *, children_by_url=None, fail_download=False):
+    def __init__(self, *, children_by_url=None, fail_download=False, error_status_by_url=None):
         self.children_by_url = children_by_url or {}
         self.downloaded = []
         self.fail_download = fail_download
+        self.error_status_by_url = error_status_by_url or {}
 
     def get_json(self, url):
         if "/sites/" in url and ":/sites/" in url:
@@ -50,6 +53,10 @@ class FakeGraph:
     def get_all(self, url):
         if url.endswith("/sites/site-1/drives"):
             return [{"id": "drive-1", "name": "Documents", "driveType": "documentLibrary"}]
+        if url in self.error_status_by_url:
+            response = requests.models.Response()
+            response.status_code = self.error_status_by_url[url]
+            raise requests.HTTPError(f"error {response.status_code}", response=response)
         if url in self.children_by_url:
             return self.children_by_url[url]
         response = requests.models.Response()
@@ -237,6 +244,38 @@ class ListCaseDocumentsTests(unittest.TestCase):
         graph = FakeGraph()
         self.assertEqual(list_case_documents(graph, "drive-1", "No Folder Case", config), [])
 
+    def test_non_404_listing_error_raises(self):
+        config = SyncConfig()
+        graph = FakeGraph(
+            error_status_by_url={children_url(f"{CASE_ROOT}/Flaky Case/Case Documents"): 503}
+        )
+        with self.assertRaises(CaseDocumentsListingError):
+            list_case_documents(graph, "drive-1", "Flaky Case", config)
+
+    def test_nested_subfolder_logs_warning(self):
+        config = SyncConfig()
+        graph = FakeGraph(
+            children_by_url={
+                children_url(f"{CASE_ROOT}/7 Eleven/Case Documents"): [
+                    file_item("Settlement Agreement.pdf", "i1"),
+                    {"id": "f1", "name": "Old Drafts", "folder": {}},
+                ]
+            }
+        )
+        with self.assertLogs("case_documents_sync", level="WARNING") as logs:
+            items = list_case_documents(graph, "drive-1", "7 Eleven", config)
+        self.assertEqual([item["id"] for item in items], ["i1"])
+        self.assertTrue(any("Old Drafts" in line for line in logs.output))
+
+
+class DriveResolutionTests(unittest.TestCase):
+    def test_matches_configured_drive_name(self):
+        self.assertEqual(get_drive_id(FakeGraph(), "site-1", "Documents"), "drive-1")
+
+    def test_raises_on_drive_name_mismatch_without_fallback(self):
+        with self.assertRaises(RuntimeError):
+            get_drive_id(FakeGraph(), "site-1", "Wrong Library")
+
 
 class SyncTests(unittest.TestCase):
     def _graph(self, *, fail_download=False):
@@ -307,6 +346,47 @@ class SyncTests(unittest.TestCase):
         ledger_upload = container.uploads["_sync/case_documents_ledger.json"]
         ledger = json.loads(ledger_upload["data"].decode("utf-8"))
         self.assertEqual(ledger["files"], {})
+
+    def test_download_failure_skips_prune(self):
+        container = FakeContainer(blobs=["7 Eleven/Previously Synced.pdf"])
+        stats = sync_case_documents(
+            graph=self._graph(fail_download=True),
+            blob_service_client=FakeBlobService(container),
+            config=SyncConfig(),
+        )
+        self.assertEqual(stats["failed"], 2)
+        self.assertEqual(stats["prune_skipped"], 1)
+        self.assertEqual(stats["stale_deleted"], 0)
+        self.assertEqual(container.deleted, [])
+
+    def test_listing_failure_skips_prune_and_keeps_blobs(self):
+        graph = FakeGraph(
+            children_by_url={
+                children_url(CASE_ROOT): [
+                    {"id": "case-1", "name": "7 Eleven", "folder": {}},
+                    {"id": "case-2", "name": "Throttled Case", "folder": {}},
+                ],
+                children_url(f"{CASE_ROOT}/7 Eleven/Case Documents"): [
+                    file_item("Class Notice.pdf", "i1"),
+                ],
+            },
+            error_status_by_url={
+                children_url(f"{CASE_ROOT}/Throttled Case/Case Documents"): 429
+            },
+        )
+        container = FakeContainer(blobs=["Throttled Case/Settlement Agreement.pdf"])
+        stats = sync_case_documents(
+            graph=graph,
+            blob_service_client=FakeBlobService(container),
+            config=SyncConfig(),
+        )
+        self.assertEqual(stats["listing_failed"], 1)
+        self.assertEqual(stats["missing_case_documents"], 0)
+        self.assertEqual(stats["uploaded"], 1)
+        self.assertEqual(stats["prune_skipped"], 1)
+        self.assertEqual(stats["stale_deleted"], 0)
+        self.assertEqual(container.deleted, [])
+        self.assertIn("7 Eleven/Class Notice.pdf", container.uploads)
 
     def test_dry_run_does_not_write(self):
         container = FakeContainer()
